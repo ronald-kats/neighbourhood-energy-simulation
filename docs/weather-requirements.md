@@ -77,9 +77,13 @@ Weather is generated **deterministically** from the simulated date/time and the 
     - Persistence: cloud cover changes gradually (random walk with configurable step size)
     - Bounded to [0.0, 1.0]
 
-2. **FR-W5.2** — Cloud cover is updated each simulation step via:
+2. **FR-W5.2** — Cloud cover is updated each simulation step via a random walk with seasonal bias and slow mean reversion:
     ```
-    cloudCover = clamp(cloudCover + randomWalkStep, 0.0, 1.0)
+    seasonalBias = winter ? +winterCloudBias : summer ? +summerCloudBias : 0
+    targetCloud  = clamp(0.5 + seasonalBias, 0.0, 1.0)
+    drift        = (rng() - 0.5) * 2 * cloudPersistence * deltaMinutes
+    reversion    = (targetCloud - lastCloudCover) * 0.0001 * deltaMinutes
+    cloudCover   = clamp(lastCloudCover + drift + reversion, 0.0, 1.0)
     ```
 
 ### FR-W6: Weather Influence on PV Production
@@ -138,7 +142,7 @@ Weather is generated **deterministically** from the simulated date/time and the 
 
 ### NFR-W4: Extensibility
 1. **NFR-W4.1** — The `WeatherCondition` object must be designed so additional weather variables (wind speed, humidity, etc.) can be added without breaking the existing `step()` signature.
-2. **NFR-W4.2** — The weather generation algorithm must be swappable (e.g., to plug in real weather data later) via a common `WeatherModel` interface.
+2. **NFR-W4.2** — The weather generation algorithm must be swappable (e.g., to plug in real weather data later). The engine depends on duck typing — any object with `getWeather(Date, rng) -> WeatherCondition` works. No explicit interface class is defined.
 
 ---
 
@@ -196,18 +200,17 @@ The `WeatherCondition` is included in the `SimulationState` export so the UI can
 |-------|---------------|
 | `Season` (enum) | Enumeration: `WINTER`, `SPRING`, `SUMMER`, `AUTUMN`. Derived from month. |
 | `WeatherCondition` (value object) | Immutable snapshot of weather at one time step: `temperature_C`, `irradianceFactor`, `cloudCover`, `season`. |
-| `WeatherModel` (interface) | Contract: `getWeather(DateTime, Random) -> WeatherCondition`. Allows swapping implementations. |
-| `DeterministicWeatherModel` | Default implementation using sinusoidal seasonal/diurnal curves + PRNG for cloud and noise. |
+| `DeterministicWeatherModel` | Default implementation using sinusoidal seasonal/diurnal curves + PRNG for cloud and noise. No explicit interface class — the contract is duck-typed: any object with `getWeather(Date, rng)` works. |
 
 ### Changed Classes
 
 | Class | Change | Rationale |
 |-------|--------|-----------|
-| `Asset` (abstract) | `step(deltaHours)` → `step(deltaHours, weather: WeatherCondition)` | Assets need weather context for realistic behaviour. WeatherCondition is a value object so assets that don't use weather can ignore it. |
+| `Asset` (abstract) | `step(deltaHours)` → `step(deltaTimeHours, weather, rng)` | Assets receive weather context for realistic behaviour and seeded PRNG for deterministic randomness. Assets that don't use weather or randomness (e.g. Battery) ignore the unused parameters. |
 | `BaseHouseholdConsumption` | `step()` accepts weather; optionally modulates base load by time-of-day and season | Provides realistic load variation (higher evenings, higher winter). |
 | `HeatPump` | `step()` uses `weather.temperature_C` to compute heating demand | Temperature is the primary driver of heat pump consumption. |
 | `PV` | `step()` uses `weather.irradianceFactor` to modulate production | Replaces random variation with physically-grounded irradiance model. |
-| `SimulationEngine` | Adds `WeatherModel` dependency; inserts a weather-update step before stepping assets each tick | Weather must be computed once per tick before assets are stepped. |
+| `SimulationEngine` | Adds `DeterministicWeatherModel` dependency; inserts a weather-update step before stepping assets each tick | Weather must be computed once per tick before assets are stepped. |
 | `SimulationState` | Adds `WeatherCondition currentWeather` field | UI needs weather context for display. |
 | `Configuration` | Adds optional `weather` section with model parameters | Allows tuning of temperature baseline, amplitude, cloud persistence, latitude, etc. |
 
@@ -216,23 +219,23 @@ The `WeatherCondition` is included in the `SimulationState` export so the UI can
 ```
 1. Advance SimulationClock
 2. Update Weather: weather = weatherModel.getWeather(clock.currentTime, rng)
-3. Step all assets with (deltaHours, weather):
+3. Step all assets with (deltaHours, weather, rng):
    a. For each House:
-      - Step BaseHouseholdConsumption
-      - Step HeatPump(s)
-      - Step PV(s)
-      - Step HomeEVCharger(s)
-   b. For each PublicEVCharger:
-      - Step PublicEVCharger
+      - Step BaseConsumption
+      - Step HeatPump
+      - Step PV
+      - Step HomeEvCharger
+   b. For each PublicEvCharger:
+      - Step PublicEvCharger
 4. Record aggregate power history
-5. Publish SimulationState (now includes weather)
+5. Publish SimulationState (now includes weather, throttled to ~10 fps)
 ```
 
 ### Asset.step() Signature Change
 
-The signature change from `step(deltaHours)` to `step(deltaHours, weather)` is a **breaking change** to the Asset abstract class and all subclasses. However, it was anticipated in the initial design (NFR5.1, NFR5.2) and in the class diagram notes ("When introduced, assets will receive a Weather object in their step() call").
+The signature change from `step(deltaHours)` to `step(deltaTimeHours, weather, rng)` is a **breaking change** to the Asset abstract class and all subclasses. However, it was anticipated in the initial design (NFR5.1, NFR5.2) and in the class diagram notes ("When introduced, assets will receive a Weather object in their step() call").
 
-Assets that do not respond to weather (e.g., EV chargers) simply ignore the parameter. Assets that do respond (PV, HeatPump, BaseHouseholdConsumption) use the relevant fields.
+Assets that do not respond to weather or randomness (e.g., EV chargers ignore weather; Battery ignores both weather and rng) simply ignore the unused parameters.
 
 ### YAML Configuration Additions
 
@@ -253,196 +256,15 @@ weather:
 
 ---
 
-## Class Diagram (Weather and Season Changes)
+## Class Diagram
 
-```mermaid
-classDiagram
-    direction TB
+See `docs/class-diagram.md` for the authoritative, up-to-date class diagram covering all components (weather, assets, peak-shaving battery, and engine). The weather-specific classes are:
 
-    %% ── New types ──────────────────────────────────────────
-
-    class Season {
-        <<enumeration>>
-        WINTER
-        SPRING
-        SUMMER
-        AUTUMN
-    }
-
-    class WeatherCondition {
-        <<value object>>
-        +double temperature_C
-        +double irradianceFactor
-        +double cloudCover
-        +Season season
-        +DateTime timestamp
-    }
-
-    class WeatherModel {
-        <<interface>>
-        +getWeather(DateTime time, Random rng) WeatherCondition
-    }
-
-    class DeterministicWeatherModel {
-        -double latitude
-        -double annualMeanTemp_C
-        -double annualAmplitude_C
-        -double diurnalAmplitude_C
-        -double noiseRange_C
-        -double cloudPersistence
-        -double winterCloudBias
-        -double summerCloudBias
-        -double lastCloudCover
-        +getWeather(DateTime time, Random rng) WeatherCondition
-        -computeTemperature(DateTime) double
-        -computeSolarElevation(DateTime) double
-        -computeCloudCover(DateTime, Random) double
-        -computeIrradianceFactor(DateTime, double, double) double
-        -deriveSeason(DateTime) Season
-    }
-
-    %% ── Changed existing classes ───────────────────────────
-
-    class Asset {
-        <<abstract>>
-        +String id
-        +String type
-        +double currentPower_kW
-        +double cumulativeEnergy_kWh
-        +double powerLimit_kW
-        +boolean isIdle
-        +step(double deltaHours, WeatherCondition weather) void
-        +reset()
-    }
-
-    class PV {
-        +double peakPower_kWp
-        +step(double deltaHours, WeatherCondition weather) void
-    }
-
-    class HeatPump {
-        +double cop
-        +double thermalLossCoefficient
-        +step(double deltaHours, WeatherCondition weather) void
-    }
-
-    class BaseHouseholdConsumption {
-        +double baseLoad_kW
-        +double varianceFactor
-        +boolean seasonalModulationEnabled
-        +step(double deltaHours, WeatherCondition weather) void
-    }
-
-    class HomeEVCharger {
-        +double chargePower_kW
-        +double sessionEnergy_kWh
-        +double sessionRemaining_kWh
-        +step(double deltaHours, WeatherCondition weather) void
-    }
-
-    class PublicEVCharger {
-        +double chargePower_kW
-        +double sessionEnergy_kWh
-        +double sessionRemaining_kWh
-        +boolean inUse
-        +step(double deltaHours, WeatherCondition weather) void
-    }
-
-    class SimulationEngine {
-        +Neighbourhood neighbourhood
-        +SimulationClock clock
-        +WeatherModel weatherModel
-        +Random rng
-        +long seed
-        +run()
-        +pause()
-        +stepOnce()
-        +getState() SimulationState
-    }
-
-    class SimulationState {
-        +DateTime currentTime
-        +WeatherCondition currentWeather
-        +double neighbourhoodNetPower_kW
-        +Map~String, Double~ assetCumulativeEnergy
-        +List~PowerRecord~ powerHistory24h
-    }
-
-    class Configuration {
-        +int numHouses
-        +int numPublicChargers
-        +double pvRatio
-        +double heatPumpRatio
-        +double homeEVRatio
-        +long randomSeed
-        +DateTime startDate
-        +double stepSizeMinutes
-        +Map~String, Object~ assetDefaults
-        +WeatherConfig weatherConfig
-        +loadFromYaml(String path) Configuration$
-    }
-
-    class WeatherConfig {
-        +double latitude
-        +double annualMeanTemperature_C
-        +double annualTemperatureAmplitude_C
-        +double diurnalTemperatureAmplitude_C
-        +double temperatureNoiseRange_C
-        +double indoorTargetTemperature_C
-        +double cloudPersistence
-        +double winterCloudBias
-        +double summerCloudBias
-        +boolean enableBaseLoadModulation
-        +double baseLoadSeasonalVariation
-    }
-
-    %% ── Unchanged (shown for context) ──────────────────────
-
-    class Neighbourhood {
-        +String name
-        +List~House~ houses
-        +List~PublicEVCharger~ publicChargers
-        +getAggregatePower() double
-        +getAggregateCumulativeEnergy() double
-        +getPowerHistory() List~PowerRecord~
-    }
-
-    class SimulationClock {
-        +DateTime currentTime
-        +DateTime startTime
-        +double stepSizeMinutes
-        +double speedMultiplier
-        +boolean isRunning
-        +tick() DateTime
-        +pause()
-        +resume()
-    }
-
-    %% ── Relationships ──────────────────────────────────────
-
-    WeatherModel <|-- DeterministicWeatherModel
-    DeterministicWeatherModel ..> WeatherCondition : creates
-    DeterministicWeatherModel ..> Season : derives
-    WeatherCondition --> Season : uses
-
-    Asset <|-- PV
-    Asset <|-- HeatPump
-    Asset <|-- BaseHouseholdConsumption
-    Asset <|-- HomeEVCharger
-    Asset <|-- PublicEVCharger
-
-    SimulationEngine --> WeatherModel : uses
-    SimulationEngine --> SimulationState : publishes
-    SimulationEngine --> Configuration : reads
-    SimulationState --> WeatherCondition : contains
-
-    Configuration --> WeatherConfig : contains
-
-    Asset ..> WeatherCondition : receives in step()
-    PV ..> WeatherCondition : reads irradianceFactor
-    HeatPump ..> WeatherCondition : reads temperature_C
-    BaseHouseholdConsumption ..> WeatherCondition : reads season, time
-```
+| Class | Responsibility |
+|-------|---------------|
+| `Season` (enum) | Enumeration: `WINTER`, `SPRING`, `SUMMER`, `AUTUMN`. Derived from month via `Season.fromMonth()`. |
+| `WeatherCondition` (value object) | Immutable snapshot of weather at one time step: `temperature_C`, `irradianceFactor`, `cloudCover`, `season`, `timestamp`. |
+| `DeterministicWeatherModel` | Concrete implementation using sinusoidal seasonal/diurnal curves + PRNG for cloud and noise. The "interface" is implicit (duck typing): any object with `getWeather(Date, rng) -> WeatherCondition` can be swapped in.
 
 ---
 
@@ -480,8 +302,9 @@ elevation        = asin(sinElevation)                             // radians
 ```
 seasonalBias     = season == WINTER ? winterCloudBias : season == SUMMER ? summerCloudBias : 0
 targetCloudBase  = clamp(0.5 + seasonalBias, 0.0, 1.0)
-drift            = (rng.nextDouble() - 0.5) * 2 * cloudPersistence * deltaMinutes
-cloudCover       = clamp(lastCloudCover + drift, 0.0, 1.0)
+drift            = (rng() - 0.5) * 2 * cloudPersistence * deltaMinutes
+reversion        = (targetCloudBase - lastCloudCover) * 0.0001 * deltaMinutes
+cloudCover       = clamp(lastCloudCover + drift + reversion, 0.0, 1.0)
 ```
 
 ### Season Derivation

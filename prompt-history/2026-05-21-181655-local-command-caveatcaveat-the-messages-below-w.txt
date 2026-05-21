@@ -1,0 +1,1871 @@
+╭─── Claude Code v2.1.73 ──────────────────────────────────────────────────────╮
+│                                                  │ Tips for getting started  │
+│                   Welcome back!                  │ Run /init to create a CL… │
+│                                                  │ ───────────────────────── │
+│                     ▗ ▗   ▖ ▖                    │ Recent activity           │
+│                                                  │ No recent activity        │
+│                       ▘▘ ▝▝                      │                           │
+│                                                  │                           │
+│   deepseek/deepseek-v4-pro · API Usage Billing   │                           │
+│    ~/Projects/neighbourhood-energy-simulation    │                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+❯ /clear                                                                        
+  ⎿  (no content)
+
+❯ You are a senior tech lead and architect. Review this project and validate:   
+Software architecture and data mode:                                            
+Solid principles                                                                
+Loosely coupled                                                                 
+Clean structure                                                                 
+Readability of code: easy to read and understand                                
+Maintainability of code: easy to debug and extend                               
+Check for race conditions in code                                               
+Document key components and responsibilities                                    
+Are tests covering unhappy flows                                                
+                                                                                
+
+⏺ Explore(Explore project structure)
+  ⎿  Done (32 tool uses · 56.0k tokens · 2m 52s)
+  (ctrl+o to expand)
+
+⏺ Read 13 files (ctrl+o to expand)
+
+⏺ Now let me read all the source files in detail for the code review.
+
+⏺ Read 11 files (ctrl+o to expand)
+
+⏺ I've now read every file in the project. Here is the full architecture review.
+
+  ---
+  Architecture & Code Quality Review
+
+  1. SOLID Principles
+
+  Single Responsibility — PASS
+
+  Each class has one clear job. SimulationClock owns time,
+  DeterministicWeatherModel owns weather computation, each asset subtype models
+  exactly one device, SimulationEngine orchestrates the tick loop, server.js
+  handles HTTP/SSE I/O. No god objects.
+
+  Open/Closed — PASS
+
+  The Asset base class (src/model/asset.js:5) defines a single step() contract.
+  Adding a new asset type (e.g. battery storage) requires only a new file
+  extending Asset and registering it in House — no changes to the engine,
+  neighbourhood, or other assets.
+
+  Liskov Substitution — PASS
+
+  All 5 asset subtypes honour the step(deltaTimeHours, weather, rng) signature.
+  The House.step() loop (src/model/house.js:50-52) iterates polymorphically —
+  any Asset subclass works.
+
+  Interface Segregation — PASS
+
+  The Asset base exposes only step() and updateEnergy(). No client is forced to
+  depend on unused methods. The weather and rng parameters use function/object
+  signatures rather than forcing assets to depend on concrete implementations.
+
+  Dependency Inversion — PASS with one note
+
+  The SimulationEngine depends on the Asset abstraction via the
+  Neighbourhood/House composition. However, House directly instantiates concrete
+   asset classes (src/model/house.js:23-44) — it's a hardcoded factory. For a
+  prototype this is fine; for production, a factory function or DI container
+  would decouple further.
+
+  ---
+  2. Coupling
+
+  The architecture is well-layered and loosely coupled:
+
+  ┌──────────────────┬──────────────────────────┬───────────────────────────┐
+  │      Layer       │        Depends on        │         Coupling          │
+  ├──────────────────┼──────────────────────────┼───────────────────────────┤
+  │ server.js        │ engine.onTick callback   │ Loose — callback pattern  │
+  ├──────────────────┼──────────────────────────┼───────────────────────────┤
+  │                  │ Clock, RNG,              │ Moderate — direct imports │
+  │ engine.js        │ Neighbourhood,           │  but clean interfaces     │
+  │                  │ WeatherModel             │                           │
+  ├──────────────────┼──────────────────────────┼───────────────────────────┤
+  │                  │ Asset base,              │ Loose — value objects, no │
+  │ model/*.js       │ WeatherCondition value   │  side effects             │
+  │                  │ object                   │                           │
+  ├──────────────────┼──────────────────────────┼───────────────────────────┤
+  │                  │                          │ Loose — pure function, no │
+  │ config/loader.js │ js-yaml, node:fs         │  side effects beyond file │
+  │                  │                          │  read                     │
+  └──────────────────┴──────────────────────────┴───────────────────────────┘
+
+  The onTick callback pattern in server.js:86-97 is clean — the server doesn't
+  import simulation internals, it only receives serialised state objects. The
+  WeatherCondition value object is passed by reference but treated as immutable.
+
+  One concern: server.js:86-97 overwrites engine.onTick monolithically. If
+  createHTTPServer were called twice, the first callback is silently lost. This
+  could be made additive.
+
+  ---
+  3. Clean Structure
+
+  Directory layout follows domain boundaries:
+
+  src/
+    index.js           — composition root (wires config → engine → server)
+    config/loader.js   — configuration parsing (single responsibility)
+    simulation/        — time, randomness, orchestration
+    model/             — domain entities (assets, house, neighbourhood, weather)
+    ui/                — presentation (served as static HTML)
+  test/                — mirrors src structure
+
+  No circular dependencies. The import graph is acyclic: model → simulation (for
+   RNG only), simulation → model, server → simulation, index → config + 
+  simulation + server.
+
+  ---
+  4. Readability
+
+  Strengths:
+  - Consistent JSDoc on all classes and public methods
+  - Descriptive naming: cumulativeEnergy_kWh, _sessionRemainingHours,
+  heatingDemand
+  - Short files (longest is weather-model.js at 149 lines)
+  - Explicit parameter documentation with types in JSDoc
+
+  Minor issues:
+  - src/model/pv.js:21 — Math.round(power * 100) / 100 || 0 — the || 0 guards
+  against negative zero but the intent is not obvious without
+  JavaScript-specific knowledge
+  - src/simulation/engine.js:89 — _currentWeather is accessed via _buildState()
+  which is called from server.js before the first tick fires. The null guard on
+  line 110 handles this, but the implicit coupling between engine startup and
+  state serialisation is subtle
+  - src/config/loader.js — The nested optional chaining
+  (parsed.houses.assets?.homeEvCharger?.sessionsPerDay) reaches 4 levels deep; a
+   schema library would make defaults more readable at scale
+
+  ---
+  5. Maintainability
+
+  Strengths:
+  - Configuration-driven: all device parameters live in config.yaml, no magic
+  numbers in code
+  - Seeded PRNG (mulberry32) guarantees reproducibility for debugging
+  - Single npm dependency (js-yaml)
+  - ESM modules throughout — no bundler needed
+  - node:test runner — no Jest/Mocha dependency
+  - Adding a new asset type requires touching only 2 files: a new model file +
+  house.js
+
+  Areas to watch:
+  - src/model/neighbourhood.js:57-59 — this.history.slice(-maxEntries) allocates
+   a new array on every trim. At 1-min steps, this copies ~1440 elements every
+  60 simulated hours. A circular buffer would be more efficient for long-running
+   simulations
+  - src/model/season.js defines an enum (Season.WINTER) while
+  src/simulation/clock.js:37-43 returns plain strings ("Winter"). Two season
+  representations coexist — if they diverge, the UI will show one value while
+  the weather model uses another. SimulationEngine._buildState() at line 106
+  uses this.clock.season (the string), not the weather model's Season enum
+
+  ---
+  6. Race Conditions
+
+  No race conditions found. The system is single-threaded by design:
+
+  - The tick loop uses setTimeout (not setInterval), scheduling the next tick
+  only after the current one completes (src/simulation/engine.js:76-79)
+  - pause() both sets clock.isRunning = false and calls clearTimeout atomically
+  within the same synchronous execution
+  - _scheduleTick() guards on this.clock.isRunning at entry
+  (src/simulation/engine.js:71), so even if a timeout fires after pause (which
+  clearTimeout prevents), it's a no-op
+  - All state mutations within _tick() happen synchronously on the event loop —
+  no await, no callbacks that yield control mid-tick
+  - The sseClients Set in server.js:14 is only mutated during synchronous
+  request handling (req.on('close') is async but Node.js delivers it on the
+  event loop, not concurrently)
+
+  Potential issue under load: If /control POSTs arrive faster than the tick
+  interval, setSpeed() → clearTimeout → _scheduleTick() can create overlapping
+  timeouts. However, _scheduleTick checks isRunning first, and _tick calls
+  _scheduleTick at the end, so the worst case is a tick fires slightly
+  earlier/later than expected — not a correctness issue.
+
+  ---
+  7. Key Component Responsibilities
+
+  Component: Config Loader
+  File: src/config/loader.js
+  Responsibility: Parse YAML, apply defaults, validate required sections
+  ────────────────────────────────────────
+  Component: RNG
+  File: src/simulation/rng.js
+  Responsibility: Seeded mulberry32 PRNG returning [0,1)
+  ────────────────────────────────────────
+  Component: Clock
+  File: src/simulation/clock.js
+  Responsibility: Simulated time, play/pause/speed, season derivation from month
+  ────────────────────────────────────────
+  Component: Engine
+  File: src/simulation/engine.js
+  Responsibility: Tick orchestration: advance clock → weather → step → record →
+    emit
+  ────────────────────────────────────────
+  Component: Weather Model
+  File: src/model/weather-model.js
+  Responsibility: Deterministic temp/cloud/irradiance from sinusoidal curves +
+    PRNG noise
+  ────────────────────────────────────────
+  Component: Weather Condition
+  File: src/model/weather-condition.js
+  Responsibility: Immutable value object: temperature, irradiance, cloud cover,
+    season
+  ────────────────────────────────────────
+  Component: Season
+  File: src/model/season.js
+  Responsibility: Frozen enum + fromMonth() derivation
+  ────────────────────────────────────────
+  Component: Asset (abstract)
+  File: src/model/asset.js
+  Responsibility: Base class: step() contract + updateEnergy() for energy
+    accounting
+  ────────────────────────────────────────
+  Component: BaseConsumption
+  File: src/model/base-consumption.js
+  Responsibility: Random walk around base load, time-of-day + seasonal
+  modulation
+  ────────────────────────────────────────
+  Component: HeatPump
+  File: src/model/heat-pump.js
+  Responsibility: Physics-based: max(0, T_indoor - T_outdoor) * lossCoeff / COP
+  ────────────────────────────────────────
+  Component: PV
+  File: src/model/pv.js
+  Responsibility: Generation: -(peakPower * irradianceFactor)
+  ────────────────────────────────────────
+  Component: HomeEvCharger
+  File: src/model/home-ev-charger.js
+  Responsibility: Stochastic session-based charging (Poisson process)
+  ────────────────────────────────────────
+  Component: PublicEvCharger
+  File: src/model/public-ev-charger.js
+  Responsibility: Same logic as home but higher power/more sessions
+  ────────────────────────────────────────
+  Component: House
+  File: src/model/house.js
+  Responsibility: Aggregates 4 assets, computes net power
+  ────────────────────────────────────────
+  Component: Neighbourhood
+  File: src/model/neighbourhood.js
+  Responsibility: Aggregates 30 houses + 6 public chargers, maintains 24h
+  history
+  ────────────────────────────────────────
+  Component: HTTP Server
+  File: src/server.js
+  Responsibility: SSE /events, POST /control, GET /state, static HTML serve
+  ────────────────────────────────────────
+  Component: UI
+  File: src/ui/index.html
+  Responsibility: Chart.js dashboard, EventSource SSE client, play/pause/speed
+    controls
+
+  ---
+  8. Test Coverage of Unhappy Paths
+
+  Current test coverage is heavily happy-path. Here is the gap analysis:
+
+  Test file: clock.test.js
+  Happy path tests: 8
+  Unhappy path tests: 0
+  Gaps: Negative advance, NaN, extreme values, month boundary edge cases
+  ────────────────────────────────────────
+  Test file: energy-accounting.test.js
+  Happy path tests: 7
+  Unhappy path tests: 0
+  Gaps: Zero/negative deltaTime, negative variance, very large step sizes, base
+    consumption without weather object
+  ────────────────────────────────────────
+  Test file: reproducibility.test.js
+  Happy path tests: 4
+  Unhappy path tests: 0
+  Gaps: Seed 0, negative seed, single-step simulation, empty neighbourhood
+  ────────────────────────────────────────
+  Test file: weather.test.js
+  Happy path tests: 8
+  Unhappy path tests: 0
+  Gaps: DST transitions, leap years, latitude extremes (equator, poles), invalid
+
+    dates
+
+  Specific missing tests:
+
+  1. Config validation errors — loadConfig() throws on missing sections but no
+  test covers this. Invalid values (negative house count, zero step size) are
+  silently accepted.
+  2. Heat pump at capacity limit — Tests verify cold > mild and idle when warm,
+  but never test the max power cap (e.g. extreme cold where heatingDemand * 
+  lossCoeff / COP > maxPower_kW).
+  3. EV charger session overlap — A single charger cannot start a new session
+  while active, but no test verifies this invariant.
+  4. History trimming — No test verifies that recordHistory correctly trims to
+  the max entry count.
+  5. Server error handling — No test for malformed JSON to /control,
+  non-existent action, missing value field.
+  6. _buildState() with null weather — _buildState() handles _currentWeather ===
+   null (line 110), but no test verifies this path.
+  7. Base consumption modulation disabled — enableModulation = true/false is
+  tested implicitly but there's no explicit test that setting it to false
+  produces no time/season variation.
+  8. Cloud cover mean reversion — The random walk + mean reversion is complex;
+  no test verifies it converges to the seasonal target over time.
+
+  ---
+  Summary
+
+  Criterion: SOLID principles
+  Grade: Good
+  Notes: All 5 principles followed; House factory is the only minor
+    tight-coupling point
+  ────────────────────────────────────────
+  Criterion: Loose coupling
+  Grade: Good
+  Notes: Clean callback pattern between server and engine; value objects for
+    cross-boundary data
+  ────────────────────────────────────────
+  Criterion: Clean structure
+  Grade: Good
+  Notes: Clear domain-aligned directory layout; acyclic dependency graph
+  ────────────────────────────────────────
+  Criterion: Readability
+  Grade: Good
+  Notes: Consistent JSDoc, descriptive names, short files. Minor clarity issue
+    with -0 || 0 in PV
+  ────────────────────────────────────────
+  Criterion: Maintainability
+  Grade: Good
+  Notes: Config-driven, single dependency, easy to extend. Two season
+    representations (enum vs string) are a small design wart
+  ────────────────────────────────────────
+  Criterion: Race conditions
+  Grade: Clean
+  Notes: Single-threaded setTimeout loop with atomic pause; no concurrent
+    mutation possible
+  ────────────────────────────────────────
+  Criterion: Documentation
+  Grade: Adequate
+  Notes: Good JSDoc on classes. docs/ and claude/ have requirements docs but no
+    architecture decision records
+  ────────────────────────────────────────
+  Criterion: Unhappy-path tests
+  Grade: Insufficient
+  Notes: All 27 tests cover happy paths only. Missing: config validation errors,
+
+    boundary conditions, max power caps, history trimming, server error
+  responses
+
+  The two most actionable findings are:
+  1. Add unhappy-path tests — especially for config validation, heat pump at
+  capacity, and server error handling
+  2. Unify the two season systems — SimulationClock.season returns "Winter"
+  strings while Season.WINTER is an enum constant. Pick one approach and use it
+  consistently, otherwise _buildState() at src/simulation/engine.js:106 reports
+  the clock's string season which may differ from the weather model's enum-based
+   season at the same timestamp
+
+✻ Brewed for 6m 52s
+
+❯ /export                                                                       
+  ⎿  Conversation exported to:
+     2026-05-21-174756-local-command-caveatcaveat-the-messages-below-w.txt
+
+❯ document key components and responsibilities when needed                      
+
+⏺ Read 3 files (ctrl+o to expand)
+
+⏺ The existing docs are good but the class diagram in docs/class-diagram.md is
+  outdated — it still shows the pre-weather step(deltaHours) signature and
+  doesn't include the weather model classes that are now implemented. Let me
+  update it to match the current code.
+
+⏺ Read 1 file (ctrl+o to expand)
+
+⏺ Write(docs/class-diagram.md)
+  ⎿  Added 162 lines, removed 106 lines
+        4  classDiagram
+        5      direction TB
+        6  
+        7 -    class Neighbourhood {                                     
+        8 -        +String name                                          
+        9 -        +List~House~ houses                                   
+       10 -        +List~PublicEVCharger~ publicChargers                 
+       11 -        +getAggregatePower() double                           
+       12 -        +getAggregateCumulativeEnergy() double                
+       13 -        +getPowerHistory() List~PowerRecord~                  
+       14 -        +addHouse(House)                                      
+       15 -        +addPublicCharger(PublicEVCharger)                    
+        7 +    %% ── Weather & Season ───────────────────────────────────
+        8 +                                                              
+        9 +    class Season {                                            
+       10 +        <<enumeration>>                                       
+       11 +        WINTER                                                
+       12 +        SPRING                                                
+       13 +        SUMMER                                                
+       14 +        AUTUMN                                                
+       15 +        +fromMonth(int month) Season$                         
+       16      }
+       17  
+       18 -    class House {                                             
+       19 -        +String id                                            
+       20 -        +double powerLimit_kW                                 
+       21 -        +List~Asset~ assets                                   
+       22 -        +getCurrentPower() double                             
+       23 -        +getCumulativeEnergy() double                         
+       24 -        +addAsset(Asset)                                      
+       18 +    class WeatherCondition {                                  
+       19 +        <<value object>>                                      
+       20 +        +double temperature_C                                 
+       21 +        +double irradianceFactor                              
+       22 +        +double cloudCover                                    
+       23 +        +Season season                                        
+       24 +        +Date timestamp                                       
+       25 +        +seasonFromDate(Date) Season$                         
+       26      }
+       27  
+       28 +    class DeterministicWeatherModel {                         
+       29 +        -double latitude                                      
+       30 +        -double annualMeanTemperature_C                       
+       31 +        -double annualTemperatureAmplitude_C                  
+       32 +        -double diurnalTemperatureAmplitude_C                 
+       33 +        -double temperatureNoiseRange_C                       
+       34 +        -double cloudPersistence                              
+       35 +        -double winterCloudBias                               
+       36 +        -double summerCloudBias                               
+       37 +        -double _lastCloudCover                               
+       38 +        +getWeather(Date, Random) WeatherCondition            
+       39 +        -_computeTemperature(Date, Random) double             
+       40 +        -_computeSolarElevation(Date) double                  
+       41 +        -_computeIrradiance(Date, double) double              
+       42 +        -_computeCloudCover(Date, Random) double              
+       43 +    }                                                         
+       44 +                                                              
+       45 +    %% ── Asset hierarchy ────────────────────────────────────
+       46 +                                                              
+       47      class Asset {
+       48          <<abstract>>
+       29 -        +String id                                            
+       30 -        +String type                                          
+       49 +        +String name                                          
+       50          +double currentPower_kW
+       51          +double cumulativeEnergy_kWh
+       33 -        +double powerLimit_kW                                 
+       34 -        +boolean isIdle                                       
+       35 -        +step(double deltaHours) void                         
+       36 -        +reset()                                              
+       52 +        +step(double deltaHours, WeatherCondition weather, Ran
+          +dom rng)* void                                                
+       53 +        +updateEnergy(double power, double deltaHours) void   
+       54      }
+       55  
+       39 -    class BaseHouseholdConsumption {                          
+       56 +    class BaseConsumption {                                   
+       57          +double baseLoad_kW
+       41 -        +double varianceFactor                                
+       42 -        +step(double deltaHours) void                         
+       58 +        +double variance_kW                                   
+       59 +        +boolean enableModulation                             
+       60 +        +double seasonalVariation                             
+       61 +        +step(double deltaHours, WeatherCondition weather, Ran
+          +dom rng) void                                                 
+       62      }
+       63  
+       64      class HeatPump {
+       65 +        +double maxPower_kW                                   
+       66 +        +double indoorTargetTemp                              
+       67 +        +double thermalLossCoefficient                        
+       68          +double cop
+       47 -        +double thermalPower_kW                               
+       48 -        +step(double deltaHours) void                         
+       69 +        +step(double deltaHours, WeatherCondition weather, Ran
+          +dom rng) void                                                 
+       70      }
+       71  
+       72      class PV {
+       52 -        +double peakPower_kWp                                 
+       53 -        +step(double deltaHours) void                         
+       73 +        +double peakPower_kW                                  
+       74 +        +step(double deltaHours, WeatherCondition weather, Ran
+          +dom rng) void                                                 
+       75      }
+       76  
+       56 -    class HomeEVCharger {                                     
+       77 +    class HomeEvCharger {                                     
+       78          +double chargePower_kW
+       58 -        +double sessionEnergy_kWh                             
+       59 -        +double sessionRemaining_kWh                          
+       60 -        +step(double deltaHours) void                         
+       79 +        +double sessionsPerDay                                
+       80 +        +double avgSessionDurationHours                       
+       81 +        -double _sessionRemainingHours                        
+       82 +        +step(double deltaHours, WeatherCondition weather, Ran
+          +dom rng) void                                                 
+       83      }
+       84  
+       63 -    class PublicEVCharger {                                   
+       85 +    class PublicEvCharger {                                   
+       86          +double chargePower_kW
+       65 -        +double sessionEnergy_kWh                             
+       66 -        +double sessionRemaining_kWh                          
+       67 -        +boolean inUse                                        
+       68 -        +step(double deltaHours) void                         
+       87 +        +double sessionsPerDay                                
+       88 +        +double avgSessionDurationHours                       
+       89 +        -double _sessionRemainingHours                        
+       90 +        +step(double deltaHours, WeatherCondition weather, Ran
+          +dom rng) void                                                 
+       91      }
+       92  
+       93 +    %% ── Composition ────────────────────────────────────────
+       94 +                                                              
+       95 +    class House {                                             
+       96 +        +int id                                               
+       97 +        +double powerLimit_kW                                 
+       98 +        +List~Asset~ assets                                   
+       99 +        +double netPower_kW                                   
+      100 +        +step(double deltaHours, WeatherCondition weather, Ran
+          +dom rng) void                                                 
+      101 +    }                                                         
+      102 +                                                              
+      103 +    class Neighbourhood {                                     
+      104 +        +List~House~ houses                                   
+      105 +        +List~PublicEvCharger~ publicChargers                 
+      106 +        +List~HistoryEntry~ history                           
+      107 +        +double netPower_kW                                   
+      108 +        +step(double deltaHours, WeatherCondition weather, Ran
+          +dom rng) void                                                 
+      109 +        +recordHistory(Date clockTime) void                   
+      110 +    }                                                         
+      111 +                                                              
+      112 +    %% ── Engine & Server ────────────────────────────────────
+      113 +                                                              
+      114      class SimulationClock {
+       72 -        +DateTime currentTime                                 
+       73 -        +DateTime startTime                                   
+       74 -        +double stepSizeMinutes                               
+       75 -        +double speedMultiplier                               
+      115 +        +Date currentTime                                     
+      116          +boolean isRunning
+       77 -        +tick() DateTime                                      
+       78 -        +pause()                                              
+       79 -        +resume()                                             
+       80 -        +setSpeed(double multiplier)                          
+      117 +        +int speedMultiplier                                  
+      118 +        +int month                                            
+      119 +        +int hour                                             
+      120 +        +String season                                        
+      121 +        +advance(int minutes) void                            
+      122 +        +play() void                                          
+      123 +        +pause() void                                         
+      124 +        +setSpeed(int multiplier) void                        
+      125      }
+      126  
+      127      class SimulationEngine {
+       84 -        +Neighbourhood neighbourhood                          
+      128 +        +int stepSizeMinutes                                  
+      129 +        +int speedMultiplier                                  
+      130          +SimulationClock clock
+       86 -        +Random rng                                           
+       87 -        +long seed                                            
+       88 -        +run()                                                
+       89 -        +pause()                                              
+       90 -        +stepOnce()                                           
+       91 -        +getState() SimulationState                           
+      131 +        +Neighbourhood neighbourhood                          
+      132 +        +DeterministicWeatherModel weatherModel               
+      133 +        +onTick(callback)                                     
+      134 +        +start() void                                         
+      135 +        +pause() void                                         
+      136 +        +resume() void                                        
+      137 +        +setSpeed(int multiplier) void                        
+      138 +        -_tick() void                                         
+      139 +        -_scheduleTick() void                                 
+      140 +        -_buildState() SimulationState                        
+      141      }
+      142  
+       94 -    class Configuration {                                     
+       95 -        +int numHouses                                        
+       96 -        +int numPublicChargers                                
+       97 -        +double pvRatio                                       
+       98 -        +double heatPumpRatio                                 
+       99 -        +double homeEVRatio                                   
+      100 -        +long randomSeed                                      
+      101 -        +DateTime startDate                                   
+      102 -        +double stepSizeMinutes                               
+      103 -        +Map~String, Object~ assetDefaults                    
+      104 -        +loadFromYaml(String path) Configuration$             
+      105 -    }                                                         
+      106 -                                                              
+      107 -    class PowerRecord {                                       
+      108 -        +DateTime timestamp                                   
+      109 -        +double totalConsumption_kW                           
+      110 -        +double totalProduction_kW                            
+      143 +    class SimulationState {                                   
+      144 +        +String time                                          
+      145 +        +String displayTime                                   
+      146 +        +String season                                        
+      147 +        +int speedMultiplier                                  
+      148 +        +boolean isRunning                                    
+      149          +double netPower_kW
+      150 +        +WeatherCondition currentWeather                      
+      151 +        +List~HistoryEntry~ history                           
+      152 +        +List~HouseState~ houses                              
+      153 +        +List~ChargerState~ publicChargers                    
+      154      }
+      155  
+      114 -    class SimulationState {                                   
+      115 -        +DateTime currentTime                                 
+      116 -        +double neighbourhoodNetPower_kW                      
+      117 -        +Map~String, Double~ assetCumulativeEnergy            
+      118 -        +List~PowerRecord~ powerHistory24h                    
+      119 -    }                                                         
+      156 +    %% ── Inheritance ────────────────────────────────────────
+      157  
+      121 -    Neighbourhood "1" *-- "30" House                          
+      122 -    Neighbourhood "1" *-- "6" PublicEVCharger                 
+      123 -    House "1" *-- "1" BaseHouseholdConsumption                
+      124 -    House "1" *-- "0..*" HeatPump                             
+      125 -    House "1" *-- "0..*" PV                                   
+      126 -    House "1" *-- "0..*" HomeEVCharger                        
+      127 -                                                              
+      128 -    Asset <|-- BaseHouseholdConsumption                       
+      158 +    Asset <|-- BaseConsumption                                
+      159      Asset <|-- HeatPump
+      160      Asset <|-- PV
+      131 -    Asset <|-- HomeEVCharger                                  
+      132 -    Asset <|-- PublicEVCharger                                
+      161 +    Asset <|-- HomeEvCharger                                  
+      162 +    Asset <|-- PublicEvCharger                                
+      163  
+      164 +    %% ── Relationships ──────────────────────────────────────
+      165 +                                                              
+      166 +    Neighbourhood "1" *-- "30" House                          
+      167 +    Neighbourhood "1" *-- "6" PublicEvCharger                 
+      168 +    House "1" *-- "4" Asset : (BaseConsumption, HeatPump, PV, 
+          +HomeEvCharger)                                                
+      169 +                                                              
+      170      SimulationEngine --> Neighbourhood
+      171      SimulationEngine --> SimulationClock
+      136 -    SimulationEngine --> Configuration                        
+      137 -    SimulationEngine --> SimulationState                      
+      172 +    SimulationEngine --> DeterministicWeatherModel            
+      173 +    SimulationEngine ..> SimulationState : emits via onTick   
+      174  
+      139 -    Neighbourhood --> PowerRecord                             
+      175 +    DeterministicWeatherModel ..> WeatherCondition : creates  
+      176 +    WeatherCondition --> Season : uses                        
+      177 +    SimulationClock ..> Season : derives string season        
+      178 +                                                              
+      179 +    Asset ..> WeatherCondition : receives in step()           
+      180 +    PV ..> WeatherCondition : reads irradianceFactor          
+      181 +    HeatPump ..> WeatherCondition : reads temperature_C       
+      182 +    BaseConsumption ..> WeatherCondition : reads season, times
+          +tamp                                                          
+      183  ```
+      184  
+      185  ## Key Design Decisions
+      186  
+      187  ### Inheritance over composition for assets
+      145 -Each asset type extends a base `Asset` class because they shar
+          -e common accounting (power, cumulative energy, limits) but hav
+          -e fundamentally different `step()` behaviour influenced by tim
+          -e and internal state.                                         
+      188 +Each asset type extends a base `Asset` class because they shar
+          +e common accounting (power, cumulative energy) but have fundam
+          +entally different `step()` behaviour influenced by time, weath
+          +er, and internal state.                                       
+      189  
+      147 -### Time-only step signature (weather deferred)               
+      148 -The `step(deltaHours)` signature keeps assets decoupled from w
+          -eather for now. Weather and season influence will be added lat
+          -er — when introduced, assets will receive a `Weather` object i
+          -n their `step()` call. This is a deliberate deferral, not a de
+          -sign limitation.                                              
+      190 +### Asset.step() signature: `step(deltaTimeHours, weather, rng
+          +)`                                                            
+      191 +Assets receive three parameters each tick:                    
+      192 +- **`deltaTimeHours`** — the simulation step size in hours, fo
+          +r energy accounting                                           
+      193 +- **`weather`** — a `WeatherCondition` value object with tempe
+          +rature, irradiance, cloud cover, and season. Assets that don't
+          + respond to weather (e.g. EV chargers) simply ignore it.      
+      194 +- **`rng`** — the seeded PRNG function, for deterministic stoc
+          +hastic behaviour                                              
+      195  
+      150 -### SimulationEngine as orchestrator                          
+      151 -The engine owns the clock and neighbourhood. Each tick it:    
+      152 -1. Advances the clock                                         
+      153 -2. Steps all assets across all houses and public chargers     
+      154 -3. Records aggregate power history                            
+      155 -4. Publishes updated `SimulationState`                        
+      196 +This was designed from the start to accommodate weather (NFR5.
+          +1, NFR5.2).                                                   
+      197  
+      157 -When weather is added later, step 1.5 will be "update weather 
+          -from clock time".                                             
+      198 +### SimulationEngine tick sequence                            
+      199 +Each tick the engine:                                         
+      200 +1. Advances the `SimulationClock` by `stepSizeMinutes`        
+      201 +2. Computes weather: `weatherModel.getWeather(clock.currentTim
+          +e, rng)`                                                      
+      202 +3. Steps the neighbourhood: recursively steps all houses (each
+          + steps its 4 assets) and public chargers                      
+      203 +4. Records aggregate power history (rolling 24-hour window)   
+      204 +5. Builds and emits `SimulationState` via the `onTick` callbac
+          +k                                                             
+      205  
+      206  ### Public EV chargers at neighbourhood level
+      160 -Public chargers belong to the neighbourhood (not houses) becau
+          -se they are shared infrastructure. Their usage model simulates
+          - random arrivals/departures of vehicles.                      
+      207 +Public chargers belong to the neighbourhood (not houses) becau
+          +se they are shared infrastructure. Their usage model simulates
+          + independent random vehicle arrivals/departures.              
+      208  
+      162 -### Base household consumption as catch-all                   
+      163 -The `BaseHouseholdConsumption` asset models *all* unmodeled ho
+          -usehold loads: ovens, lighting, electronics, dishwashers, etc.
+          - This is why a house's total consumption always equals or exce
+          -eds the sum of its explicitly modeled optional assets (heat pu
+          -mp, EV charger) — the base load is always present and non-nega
+          -tive.                                                         
+      209 +### Base consumption as catch-all                             
+      210 +`BaseConsumption` models all unmodeled household loads: ovens,
+          + lighting, electronics, dishwashers, etc. It is always present
+          + and non-negative, which guarantees that a house's total consu
+          +mption always equals or exceeds the sum of its explicitly mode
+          +led assets (heat pump, EV charger) minus PV generation.       
+      211  
+      165 -```text                                                       
+      166 -house.totalPower = baseLoad.power + heatPump.power + evCharger
+          -.power - pv.power                                             
+      167 -                                  \________ explicit optional 
+          -assets ________/                                              
+      168 -```                                                           
+      212   No newline at end of file
+      213 +```                                                           
+      214 +house.netPower = baseLoad.power + heatPump.power + evCharger.p
+          +ower - pv.power                                               
+      215 +                 \________ always-present base load ________/ 
+          + \_ generation _/                                             
+      216 +```                                                           
+      217 +                                                              
+      218 +### Weather model: deterministic, sinusoidal + PRNG noise     
+      219 +The `DeterministicWeatherModel` generates weather from the sim
+          +ulated date/time and the seeded PRNG — no external APIs. Tempe
+          +rature uses a sinusoidal annual curve (peak July, trough Janua
+          +ry) plus a diurnal curve (peak 14:00, trough 04:00) plus small
+          + PRNG noise. Irradiance uses solar geometry (declination, hour
+          + angle, latitude) attenuated by cloud cover. Cloud cover is a 
+          +bounded random walk with seasonal bias and mean reversion.    
+      220 +                                                              
+      221 +### Seeded PRNG for full reproducibility                      
+      222 +All randomness flows through a single seeded mulberry32 PRNG. 
+          +The same seed + config + start time always produces identical 
+          +results — simulation state, weather, and asset behaviour are f
+          +ully deterministic.                                           
+      223 +                                                              
+      224 +### Server/UI: callback-based decoupling                      
+      225 +The HTTP server (`server.js`) receives state via the engine's 
+          +`onTick` callback and broadcasts to SSE clients. The engine ha
+          +s no knowledge of HTTP, SSE, or the browser. The server wraps 
+          +the `onTick` callback — it does not import or depend on simula
+          +tion internals beyond the `SimulationState` shape.            
+
+⏺ Now let me verify the tests still pass and the updated diagram reads
+  correctly.
+  ⎿  Invalid tool parameters
+
+⏺ Bash(node --test 2>&1)
+  ⎿  ▶ SimulationClock
+       ✔ starts at the given time (4.718209ms)
+       ✔ advances by the given number of minutes (0.761042ms)
+     … +31 lines (ctrl+o to expand)
+
+⏺ All 32 tests pass. Here's a summary of what was done:
+
+  Documentation Updated
+
+  docs/class-diagram.md was rewritten to reflect the current as-built
+  implementation. Key changes:
+
+  ┌────────────────────────────────┬────────────────────────────────────────┐
+  │       Before (outdated)        │            After (current)             │
+  ├────────────────────────────────┼────────────────────────────────────────┤
+  │ step(deltaHours) — no weather  │ step(deltaHours, weather, rng) —       │
+  │                                │ weather + PRNG injected                │
+  ├────────────────────────────────┼────────────────────────────────────────┤
+  │                                │ Season, WeatherCondition,              │
+  │ No weather classes             │ DeterministicWeatherModel added with   │
+  │                                │ full member lists                      │
+  ├────────────────────────────────┼────────────────────────────────────────┤
+  │ BaseHouseholdConsumption       │ BaseConsumption (matches actual class  │
+  │                                │ name)                                  │
+  ├────────────────────────────────┼────────────────────────────────────────┤
+  │ Asset.isIdle,                  │ Removed — these don't exist in the     │
+  │ Asset.powerLimit_kW,           │ code                                   │
+  │ Asset.reset()                  │                                        │
+  ├────────────────────────────────┼────────────────────────────────────────┤
+  │ "Weather deferred" language    │ Removed — weather is implemented       │
+  ├────────────────────────────────┼────────────────────────────────────────┤
+  │ Old tick sequence (4 steps, no │ Current 5-step tick sequence with      │
+  │  weather)                      │ weather computation                    │
+  ├────────────────────────────────┼────────────────────────────────────────┤
+  │ Missing engine/server          │ Added section on callback-based        │
+  │ decoupling explanation         │ decoupling                             │
+  ├────────────────────────────────┼────────────────────────────────────────┤
+  │ House "1" *-- "0..*" for each  │ House "1" *-- "4" Asset — each house   │
+  │ asset                          │ always has exactly 4 assets            │
+  ├────────────────────────────────┼────────────────────────────────────────┤
+  │ Asset ..> WeatherCondition     │ Added — shows assets receive weather   │
+  │ dependency                     │ in step()                              │
+  ├────────────────────────────────┼────────────────────────────────────────┤
+  │ No PRNG documentation          │ Added explanation of seeded mulberry32 │
+  │                                │  for full reproducibility              │
+  └────────────────────────────────┴────────────────────────────────────────┘
+
+  The docs/requirements.md and docs/weather-requirements.md remain accurate as
+  requirement specifications — the "Deferred" section in requirements.md serves
+  as a historical record of what was deferred and later implemented.
+
+✻ Cooked for 2m 1s
+
+❯ /export                                                                       
+  ⎿  Conversation exported to:
+     2026-05-21-180516-local-command-caveatcaveat-the-messages-below-w.txt
+
+❯ update documentation again where needed                                       
+
+⏺ Read 2 files (ctrl+o to expand)
+
+⏺ Let me re-read all the docs and cross-reference against the actual code to
+  find any remaining gaps.
+
+⏺ Read 4 files (ctrl+o to expand)
+
+⏺ I found several discrepancies between the docs and the actual code. The
+  requirements.md still describes weather as "deferred" and has outdated
+  details. Let me cross-reference systematically and fix both files.
+
+⏺ Searched for 1 pattern, read 2 files (ctrl+o to expand)
+
+⏺ I notice the engine has new battery-related code. Let me check what else
+  changed.
+
+⏺ Read 4 files (ctrl+o to expand)
+
+⏺ New files have been added since my initial review. Let me read them all.
+
+⏺ Read 1 file (ctrl+o to expand)
+
+⏺ Now I have the full picture. There are new peak-shaving components (Battery,
+  PeakShavingController) and several doc discrepancies. Let me update all three
+  docs.
+
+⏺ Write(docs/class-diagram.md)
+  ⎿  Added 50 lines, removed 8 lines
+       90          +step(double deltaHours, WeatherCondition weather, Ran
+           dom rng) void
+       91      }
+       92  
+       93 +    class Battery {                                           
+       94 +        +double capacity_kWh                                  
+       95 +        +double maxChargePower_kW                             
+       96 +        +double maxDischargePower_kW                          
+       97 +        +double minSocFraction                                
+       98 +        +double maxSocFraction                                
+       99 +        +double roundTripEfficiency                           
+      100 +        +double stateOfCharge_kWh                             
+      101 +        +double currentPower_kW                               
+      102 +        +double socFraction                                   
+      103 +        +double targetSoc                                     
+      104 +        +double availableDischargeEnergy_kWh                  
+      105 +        +double availableChargeCapacity_kWh                   
+      106 +        +step(double, WeatherCondition, Random) void          
+      107 +        +applyTargetPower(double deltaHours, double targetPowe
+          +r) void                                                       
+      108 +    }                                                         
+      109 +                                                              
+      110 +    class PeakShavingController {                             
+      111 +        <<stateless>>                                         
+      112 +        +compute(double rawNet, Battery battery, Object config
+          +, double deltaHours) double$                                  
+      113 +    }                                                         
+      114 +                                                              
+      115      %% ── Composition ────────────────────────────────────────
+      116  
+      117      class House {
+     ...
+      125      class Neighbourhood {
+      126          +List~House~ houses
+      127          +List~PublicEvCharger~ publicChargers
+      128 +        +Battery battery                                      
+      129          +List~HistoryEntry~ history
+      130          +double netPower_kW
+      131          +step(double deltaHours, WeatherCondition weather, Ran
+           dom rng) void
+      132          +recordHistory(Date clockTime) void
+      133 +        -_rawNetPower_kW() double                             
+      134      }
+      135  
+      136      %% ── Engine & Server ────────────────────────────────────
+     ...
+      162          -_tick() void
+      163          -_scheduleTick() void
+      164          -_buildState() SimulationState
+      165 +        -_lastEmitTime int                                    
+      166      }
+      167  
+      168      class SimulationState {
+     ...
+      176          +List~HistoryEntry~ history
+      177          +List~HouseState~ houses
+      178          +List~ChargerState~ publicChargers
+      179 +        +BatteryState battery                                 
+      180      }
+      181  
+      182      %% ── Inheritance ────────────────────────────────────────
+     ...
+      186      Asset <|-- PV
+      187      Asset <|-- HomeEvCharger
+      188      Asset <|-- PublicEvCharger
+      189 +    Asset <|-- Battery                                        
+      190  
+      191      %% ── Relationships ──────────────────────────────────────
+      192  
+      193      Neighbourhood "1" *-- "30" House
+      194      Neighbourhood "1" *-- "6" PublicEvCharger
+      195 +    Neighbourhood "1" o-- "0..1" Battery : optional peak-shavi
+          +ng                                                            
+      196      House "1" *-- "4" Asset : (BaseConsumption, HeatPump, PV, 
+           HomeEvCharger)
+      197  
+      198      SimulationEngine --> Neighbourhood
+     ...
+      200      SimulationEngine --> DeterministicWeatherModel
+      201      SimulationEngine ..> SimulationState : emits via onTick
+      202  
+      203 +    Neighbourhood --> PeakShavingController : uses            
+      204 +    PeakShavingController ..> Battery : reads state, computes 
+          +target                                                        
+      205 +                                                              
+      206      DeterministicWeatherModel ..> WeatherCondition : creates
+      207      WeatherCondition --> Season : uses
+      208      SimulationClock ..> Season : derives string season
+     ...
+      221  ### Asset.step() signature: `step(deltaTimeHours, weather, rng
+           )`
+      222  Assets receive three parameters each tick:
+      223  - **`deltaTimeHours`** — the simulation step size in hours, fo
+           r energy accounting
+      193 -- **`weather`** — a `WeatherCondition` value object with tempe
+          -rature, irradiance, cloud cover, and season. Assets that don't
+          - respond to weather (e.g. EV chargers) simply ignore it.      
+      224 +- **`weather`** — a `WeatherCondition` value object with tempe
+          +rature, irradiance, cloud cover, and season. Assets that don't
+          + respond to weather (EV chargers, battery) simply ignore it.  
+      225  - **`rng`** — the seeded PRNG function, for deterministic stoc
+           hastic behaviour
+      226  
+      196 -This was designed from the start to accommodate weather (NFR5.
+          -1, NFR5.2).                                                   
+      197 -                                                              
+      227  ### SimulationEngine tick sequence
+      228  Each tick the engine:
+      229  1. Advances the `SimulationClock` by `stepSizeMinutes`
+      230  2. Computes weather: `weatherModel.getWeather(clock.currentTim
+           e, rng)`
+      202 -3. Steps the neighbourhood: recursively steps all houses (each
+          - steps its 4 assets) and public chargers                      
+      203 -4. Records aggregate power history (rolling 24-hour window)   
+      204 -5. Builds and emits `SimulationState` via the `onTick` callbac
+          -k                                                             
+      231 +3. Steps the neighbourhood:                                   
+      232 +   - Steps all houses (each steps its 4 assets and accumulates
+          + energy)                                                      
+      233 +   - Steps all public EV chargers                             
+      234 +   - If peak-shaving is enabled: computes and applies battery 
+          +target power via `PeakShavingController`                      
+      235 +4. Records aggregate power history (rolling 24-hour window, si
+          +zed dynamically from step size)                               
+      236 +5. Builds and emits `SimulationState` via the `onTick` callbac
+          +k (throttled to ~10 fps)                                      
+      237  
+      238  ### Public EV chargers at neighbourhood level
+      239  Public chargers belong to the neighbourhood (not houses) becau
+           se they are shared infrastructure. Their usage model simulates
+            independent random vehicle arrivals/departures.
+     ...
+      247  ```
+      248  
+      249  ### Weather model: deterministic, sinusoidal + PRNG noise
+      218 -The `DeterministicWeatherModel` generates weather from the sim
+          -ulated date/time and the seeded PRNG — no external APIs. Tempe
+          -rature uses a sinusoidal annual curve (peak July, trough Janua
+          -ry) plus a diurnal curve (peak 14:00, trough 04:00) plus small
+          - PRNG noise. Irradiance uses solar geometry (declination, hour
+          - angle, latitude) attenuated by cloud cover. Cloud cover is a 
+          -bounded random walk with seasonal bias and mean reversion.    
+      250 +The `DeterministicWeatherModel` generates weather from the sim
+          +ulated date/time and the seeded PRNG — no external APIs. Tempe
+          +rature uses a sinusoidal annual curve (peak July, trough Janua
+          +ry) plus a diurnal curve (peak 14:00, trough 04:00) plus small
+          + PRNG noise. Irradiance uses solar geometry (declination, hour
+          + angle, latitude) attenuated by cloud cover. Cloud cover is a 
+          +bounded random walk with seasonal bias and slow mean reversion
+          +.                                                             
+      251  
+      252 +### Peak-shaving battery (optional)                           
+      253 +A neighbourhood-level battery can be enabled via the `peakShav
+          +ing.enabled` config flag. The stateless `PeakShavingController
+          +` evaluates four rules in priority order each tick:           
+      254 +                                                              
+      255 +1. **Peak shaving** — if raw net power exceeds the configured 
+          +threshold, the battery discharges to shave the peak           
+      256 +2. **Solar charging** — if raw net power is negative (excess g
+          +eneration), the battery charges from the surplus              
+      257 +3. **SoC rebalancing** — if the battery is below its target So
+          +C midpoint, it gently charges at 25% of max rate              
+      258 +4. **Idle** — otherwise, the battery does nothing             
+      259 +                                                              
+      260 +The battery enforces physical constraints: SoC bounds (`minSoc
+          +Fraction`–`maxSocFraction`), power limits (`maxChargePower_kW`
+          +, `maxDischargePower_kW`), and round-trip efficiency (applied 
+          +as `sqrt(efficiency)` per direction).                         
+      261 +                                                              
+      262  ### Seeded PRNG for full reproducibility
+      221 -All randomness flows through a single seeded mulberry32 PRNG. 
+          -The same seed + config + start time always produces identical 
+          -results — simulation state, weather, and asset behaviour are f
+          -ully deterministic.                                           
+      263 +All randomness flows through a single seeded mulberry32 PRNG. 
+          +The same seed + config + start time always produces identical 
+          +results — simulation state, weather, and asset behaviour are f
+          +ully deterministic. The battery and peak-shaving controller ar
+          +e purely algorithmic (no randomness).                         
+      264  
+      265  ### Server/UI: callback-based decoupling
+      266  The HTTP server (`server.js`) receives state via the engine's 
+           `onTick` callback and broadcasts to SSE clients. The engine ha
+           s no knowledge of HTTP, SSE, or the browser. The server wraps 
+           the `onTick` callback — it does not import or depend on simula
+           tion internals beyond the `SimulationState` shape.
+
+⏺ Now update requirements.md to reflect what's actually implemented.
+
+⏺ Write(docs/requirements.md)
+  ⎿  Added 61 lines, removed 46 lines
+       5  ### FR1: Data Model
+       6  1. **FR1.1** — A neighbourhood consists of exactly 30 houses an
+          d 6 public EV chargers.
+       7  2. **FR1.2** — Each house has exactly one base household consum
+          ption asset.
+       8 -3. **FR1.3** — Each house may have zero or more optional assets
+         -: heat pump(s), PV panel(s), home EV charger(s).               
+       8 +3. **FR1.3** — Each house has exactly one of each optional asse
+         +t: heat pump, PV panels, and home EV charger.                  
+       9  4. **FR1.4** — Every asset must track:
+      10      - Current power in **kW** (not kWh)
+      11      - Cumulative energy since simulation start in **kWh**
+      12 -    - Power limit (capacity) in **kW**                         
+      12  5. **FR1.5** — Each house must have a power consumption limit i
+          n **kW** (not kWh).
+      14 -6. **FR1.6** — Each house's total consumption must equal the su
+         -m of its assets' consumption at any point in time.             
+      13 +6. **FR1.6** — Each house's net power must equal the sum of its
+         + assets' power at any point in time.                           
+      14  7. **FR1.7** — Public EV chargers are shared infrastructure bel
+          onging to the neighbourhood, not to individual houses.
+      15  
+      16  ### FR2: Configuration
+      17  1. **FR2.1** — The neighbourhood model must be configurable via
+           a YAML file.
+      18  2. **FR2.2** — YAML configuration must support:
+      19      - Fixed random seed for reproducibility
+      21 -    - Proportions/ratios for asset distribution (PV, heat pump,
+         - home EV)                                                      
+      20      - Power limits per asset type
+      21      - Simulation start date/time
+      22      - Simulation step size
+      23 +    - Weather model parameters (temperature, irradiance, cloud 
+         +cover)                                                         
+      24 +    - Optional peak-shaving battery parameters                 
+      25  3. **FR2.3** — System must validate configuration on load and r
+          eject invalid configs with clear errors.
+      26 +    - Implemented: validates presence of `simulation`, `houses`
+         +, and `publicChargers` sections. All fields have defaults so in
+         +dividual values are not validated for type/range.              
+      27  
+      28  ### FR3: Simulation Clock
+      29  1. **FR3.1** — Simulation must maintain a controllable clock wi
+          th simulated date/time.
+      29 -2. **FR3.2** — Clock must advance in configurable discrete step
+         -s (default: 1 minute).                                         
+      30 -3. **FR3.3** — Clock must support: play, pause, and speed contr
+         -ol (e.g., 1x, 10x, 60x, 3600x real-time).                      
+      30 +2. **FR3.2** — Clock must advance in configurable discrete step
+         +s (default: 60 minutes).                                       
+      31 +3. **FR3.3** — Clock must support: play, pause, and speed contr
+         +ol (configurable multiplier, UI offers 1h/s, 6h/s, 1d/s, 5d/s).
+      32  4. **FR3.4** — Current simulated date/time must be queryable at
+           any point.
+      33 +5. **FR3.5** — Clock derives a string season (Winter/Spring/Sum
+         +mer/Autumn) from the current month for UI display.             
+      34  
+      35  ### FR4: Asset Behaviour
+      34 -1. **FR4.1** — Base household consumption must vary randomly ar
+         -ound a configured base load within its power limit.            
+      35 -2. **FR4.2** — Heat pump consumption must vary randomly within 
+         -its power limit (weather influence deferred).                  
+      36 -3. **FR4.3** — PV production must vary randomly within its powe
+         -r limit (weather/irradiance influence deferred).               
+      37 -4. **FR4.4** — EV chargers (home and public) must simulate char
+         -ging sessions: start at random times, run for a duration, then 
+         -go idle.                                                       
+      36 +1. **FR4.1** — Base household consumption varies with a bounded
+         + random walk around a configured base load, modulated by time-o
+         +f-day (evening bump, night dip) and season (winter increase). M
+         +odulation can be disabled in config.                           
+      37 +2. **FR4.2** — Heat pump consumption is driven by outdoor tempe
+         +rature: `heatingDemand = max(0, T_indoor - T_outdoor)`, power =
+         + `min(heatingDemand * thermalLossCoefficient / COP, maxPower_kW
+         +)`. Idles when outdoor >= indoor target.                       
+      38 +3. **FR4.3** — PV production is driven by irradiance: `pvPower 
+         += -(peakPower_kW * irradianceFactor)`. Zero at night, proportio
+         +nal to solar elevation and reduced by cloud cover.             
+      39 +4. **FR4.4** — EV chargers (home and public) simulate charging 
+         +sessions: start at random times (Poisson process), run for a ra
+         +ndom duration, then go idle.                                   
+      40  5. **FR4.5** — Public EV chargers must have an independent usag
+          e model (random arrivals, not tied to specific houses).
+      39 -6. **FR4.6** — Assets must respect their configured power limit
+         -s (0 <= |power| <= limit).                                     
+      41 +6. **FR4.6** — HeatPump enforces `maxPower_kW` cap. BaseConsump
+         +tion clamps to `baseLoad ± variance` bounds. PV and EV chargers
+         + have no explicit power limit enforcement (their formulas are n
+         +aturally bounded).                                             
+      42  7. **FR4.7** — Assets can be in idle state (current power = 0).
+      43  
+      44  ### FR5: Energy Accounting
+      45  1. **FR5.1** — Every asset must accurately accumulate energy: `
+          cumulativeEnergy += currentPower * deltaTimeHours`.
+      46  2. **FR5.2** — Neighbourhood must track aggregate net power at 
+          each time step.
+      45 -3. **FR5.3** — Neighbourhood must maintain a rolling 24-hour po
+         -wer history.                                                   
+      47 +3. **FR5.3** — Neighbourhood must maintain a rolling 24-hour po
+         +wer history. Window size is dynamically computed from step size
+         + (`ceil(1440 / stepSizeMinutes)` entries).                     
+      48  4. **FR5.4** — PV production offsets local house load first; ex
+          cess is exported (negative net load at house level).
+      47 -5. **FR5.5** — Energy accounting must be consistent: neighbourh
+         -ood aggregate = sum of all house totals + public charger totals
+         -.                                                              
+      49 +5. **FR5.5** — Energy accounting must be consistent: neighbourh
+         +ood aggregate = sum of all house totals + public charger totals
+         + + battery (if enabled).                                       
+      50  
+      51  ### FR6: Simulation Reproducibility
+      52  1. **FR6.1** — Given the same YAML config (including seed), the
+           simulation must produce identical results.
+      51 -2. **FR6.2** — All randomness must flow through a single seeded
+         - PRNG.                                                         
+      53 +2. **FR6.2** — All randomness must flow through a single seeded
+         + mulberry32 PRNG.                                              
+      54 +3. **FR6.3** — Peak-shaving controller and battery are purely a
+         +lgorithmic (no randomness), so they do not affect reproducibili
+         +ty.                                                            
+      55  
+      56  ### FR7: Data Export / State Access
+      57  1. **FR7.1** — Current simulation state must be queryable at an
+          y time (for UI consumption).
+      55 -2. **FR7.2** — State must include: current time, neighbourhood 
+         -net power, and per-asset cumulative energy.                    
+      58 +2. **FR7.2** — State must include: current time, season, neighb
+         +ourhood net power, weather conditions, per-asset cumulative ene
+         +rgy, 24-hour power history, and battery status (if enabled).   
+      59 +3. **FR7.3** — State emission is throttled to ~10 fps to keep t
+         +he UI responsive at high simulation speeds.                    
+      60  
+      61 +### FR8: Peak-Shaving Battery (Optional)                       
+      62 +1. **FR8.1** — A neighbourhood-level battery can be enabled via
+         + `peakShaving.enabled` in config.                              
+      63 +2. **FR8.2** — Battery tracks state of charge (kWh), enforces S
+         +oC bounds, power limits, and round-trip efficiency.            
+      64 +3. **FR8.3** — `PeakShavingController` computes target battery 
+         +power each step using four priority-ordered rules:             
+      65 +    1. Discharge to shave peaks above `peakThreshold_kW`       
+      66 +    2. Charge from excess solar generation (negative net power)
+      67 +    3. Gentle charge toward target SoC midpoint (25% of max rat
+         +e) when below target                                           
+      68 +    4. Idle otherwise                                          
+      69 +4. **FR8.4** — Round-trip efficiency is applied symmetrically: 
+         +`sqrt(efficiency)` loss per charge/discharge direction.        
+      70 +                                                               
+      71  ---
+      72  
+      73  ## Non-Functional Requirements
+     ...
+       80  ### NFR2: Performance
+       81  1. **NFR2.1** — Simulation must run at least 60x real-time on 
+           modern hardware (1 simulated hour per wall-clock second) to en
+           able practical UI demonstration.
+       82  2. **NFR2.2** — Memory usage must not grow unbounded (power hi
+           story limited to 24h retention).
+       83 +3. **NFR2.3** — Weather computation per step is O(1).         
+       84  
+       85  ### NFR3: Correctness
+       86  1. **NFR3.1** — Energy accounting must be verified by automate
+           d tests.
+       72 -2. **NFR3.2** — Cumulative energy values must be monotonic for
+          - consumption and production assets.                           
+       73 -3. **NFR3.3** — Test coverage for core simulation logic (clock
+          -, assets, accounting).                                        
+       87 +2. **NFR3.2** — Cumulative energy values must be monotonic for
+          + consumption assets.                                          
+       88 +3. **NFR3.3** — Test coverage for core simulation logic (clock
+          +, assets, accounting, weather, reproducibility).              
+       89  
+       90  ### NFR4: Determinism
+       91  1. **NFR4.1** — Fixed seed must produce identical simulation r
+           uns.
+       92  2. **NFR4.2** — All stochastic behaviour must be seed-dependen
+           t.
+       93  
+       94  ### NFR5: Extensibility
+       80 -1. **NFR5.1** — Asset `step()` signature must accommodate a fu
+          -ture `Weather` parameter without breaking existing assets.    
+       81 -2. **NFR5.2** — Simulation engine must accommodate a future we
+          -ather update step without restructuring the main loop.        
+       95 +1. **NFR5.1** — Asset `step()` signature accepts `(deltaTimeHo
+          +urs, weather, rng)` — weather and PRNG are injected, so new as
+          +set types have access to both without signature changes.      
+       96 +2. **NFR5.2** — The weather model is swappable via duck typing
+          + (any object with `getWeather(date, rng) -> WeatherCondition` 
+          +works).                                                       
+       97  
+       98  ---
+       99  
+       85 -## Deferred: Weather and Season                               
+      100 +## Implemented: Weather and Season                            
+      101  
+       87 -Weather and season are intentionally deferred to a later phase
+          -. When added:                                                 
+       88 -- A `Weather` class will provide `temperature_C` and `irradian
+          -ceFactor` derived from the simulated date/time                
+       89 -- Season will be derived from the date (spring/summer/autumn/w
+          -inter)                                                        
+       90 -- `Asset.step(deltaHours)` will become `Asset.step(deltaHours,
+          - weather)`                                                    
+       91 -- PV production will respond to irradiance                    
+       92 -- Heat pump consumption will respond to temperature           
+       93 -- Base load will respond to time-of-day and season            
+      102 +Weather and season were initially deferred (see git history) a
+          +nd are now fully implemented. See `docs/weather-requirements.m
+          +d` for detailed specifications.                               
+      103  
+       95 -Current asset behaviour uses simple random variation within li
+          -mits as a stand-in.                                           
+      104 +Summary of implemented weather features:                      
+      105 +- `Season` enum (`WINTER`, `SPRING`, `SUMMER`, `AUTUMN`) deriv
+          +ed from month                                                 
+      106 +- `WeatherCondition` value object: `temperature_C`, `irradianc
+          +eFactor`, `cloudCover`, `season`, `timestamp`                 
+      107 +- `DeterministicWeatherModel`: sinusoidal annual + diurnal tem
+          +perature curves with PRNG noise; solar geometry irradiance att
+          +enuated by cloud cover; cloud cover as bounded random walk wit
+          +h seasonal bias and mean reversion                            
+      108 +- PV production responds to `irradianceFactor`                
+      109 +- Heat pump consumption responds to `temperature_C`           
+      110 +- Base load modulation responds to time-of-day and season (con
+          +figurable, can be disabled)                                   
+      111  
+      112  ---
+      113  
+     ...
+      116  ### 1. Unit Error: Power vs Energy — Fixed
+      117  - **Original**: "Current power in kWh" and "Power limit in kWh
+           "
+      118  - **Problem**: kWh is a unit of energy, not power. Power is me
+           asured in kW.
+      104 -- **Fix**: Changed `Requirements.md` to use kW for current pow
+          -er and power limits, kWh for cumulative energy.               
+      119 +- **Fix**: Changed to use kW for current power and power limit
+          +s, kWh for cumulative energy.                                 
+      120  
+      121  ### 2. "Household consumption matches or exceeds assets" — Cla
+           rified
+      122  - **Original**: "Household consumption and production always m
+           atches or exceeds consumption and production of its assets"
+      108 -- **Resolution**: The base household consumption asset acts as
+          - a catch-all for unmodeled loads: ovens, dishwashers, lighting
+          -, electronics, etc. This is why house total consumption will a
+          -lways *equal or exceed* the sum of the explicitly modeled opti
+          -onal assets (heat pump, EV charger).                          
+      109 -- **Formula**: `House.totalConsumption = baseLoad.power + sum(
+          -heatPumps) + sum(evChargers) - sum(pv)` where baseLoad is alwa
+          -ys present and non-negative, guaranteeing house total >= sum o
+          -f optional explicit assets.                                   
+      123 +- **Resolution**: The base household consumption asset acts as
+          + a catch-all for unmodeled loads: ovens, dishwashers, lighting
+          +, electronics, etc. House net power includes the always-presen
+          +t non-negative base load.                                     
+      124 +- **Formula**: `house.netPower = baseLoad.power + heatPump.pow
+          +er + evCharger.power - pv.power`                              
+      125  
+      111 -### 3. Public EV Charger Usage Model Not Defined (Medium)     
+      126 +### 3. Public EV Charger Usage Model Not Defined — Resolved   
+      127  - **Problem**: The assignment states "you define your usage mo
+           del, but document it" — but the requirements don't even mentio
+           n that this needs defining.
+      113 -- **Resolution**: Added FR4.5 requiring an independent usage m
+          -odel with random arrivals.                                    
+      128 +- **Resolution**: Implemented as a Poisson process: session st
+          +art probability = `sessionsPerDay / 24 * deltaTimeHours`, rand
+          +om duration around `avgSessionDurationHours`.                 
+      129  
+      115 -### 4. Weather Model Underspecified — Deferred                
+      116 -- **Problem**: Requirements say "at least one variable" but do
+          -n't specify minimum behaviour.                                
+      117 -- **Resolution**: Weather and season deferred to later phase. 
+          -Current assets use random variation. See "Deferred: Weather an
+          -d Season" section.                                            
+      130 +### 4. Weather Model Underspecified — Resolved                
+      131 +- **Problem**: Requirements said "at least one variable" but d
+          +idn't specify minimum behaviour.                              
+      132 +- **Resolution**: Fully implemented with temperature, irradian
+          +ce, and cloud cover models. See `docs/weather-requirements.md`
+          +.                                                             
+      133  
+      119 -### 5. PV Export Model Not Defined (Medium)                   
+      120 -- **Problem**: Requirements say "Define whether PV offsets loc
+          -al load, exports to grid, etc." but the core requirements don'
+          -t specify this.                                               
+      121 -- **Resolution**: Added FR5.4: PV offsets local load first, ex
+          -cess is exported as negative net load.                        
+      134 +### 5. PV Export Model Not Defined — Resolved                 
+      135 +- **Problem**: Requirements said "Define whether PV offsets lo
+          +cal load, exports to grid, etc." but the core requirements did
+          +n't specify this.                                             
+      136 +- **Resolution**: PV offsets local load first, excess is expor
+          +ted as negative net load at house level.                      
+      137  
+      138  ### 6. No Simulation Start Defined — Fixed
+      139  - **Problem**: No specification of when the simulation starts.
+      125 -- **Resolution**: Added configurable start date/time to `Requi
+          -rements.md` configuration section.                            
+      140 +- **Resolution**: Added configurable start date/time to config
+          +uration.                                                      
+      141  
+      142  ### 7. No Speed Control Specification — Fixed
+      143  - **Problem**: Assignment mentions "controllable simulation cl
+           ock" but requirements don't specify controls.
+      129 -- **Resolution**: Added play, pause, and speed control to `Req
+          -uirements.md` core simulation model.                          
+      144 +- **Resolution**: Added play, pause, and speed control to the 
+          +simulation engine and UI.                                     
+      145  
+      146  ### 8. "Current Date/Time" Without Start Reference — Fixed
+      147  - **Problem**: Requirements mention tracking "simulated date/t
+           ime" but not when it begins.
+      133 -- **Resolution**: Added "configurable start date/time" to cloc
+          -k description in `Requirements.md`.                           
+      148 +- **Resolution**: Added configurable start date/time.         
+      149  
+      150  ### 9. Missing Reproducibility Requirement — Fixed
+      151  - **Problem**: The assignment requires deterministic simulatio
+           n but the requirements document doesn't state this.
+      137 -- **Resolution**: Added fixed random seed and reproducibility 
+          -guarantee to `Requirements.md` configuration and simulator sec
+          -tions.                                                        
+      152 +- **Resolution**: Added fixed random seed and reproducibility 
+          +guarantee.                                                    
+      153  
+      139 -### 10. Asset Counting Ambiguity (Low)                        
+      140 -- **Problem**: "Heat pump (optional, consumes power, multiple 
+          -possible)" — "multiple" is unclear. Can a house have 2 heat pu
+          -mps? 10?                                                      
+      141 -- **Resolution**: Model supports zero or more of each optional
+          - asset type; configuration defines the distribution.          
+      154   No newline at end of file
+      155 +### 10. Asset Counting Ambiguity — Resolved                   
+      156 +- **Problem**: "Heat pump (optional, consumes power, multiple 
+          +possible)" — "multiple" is unclear.                           
+      157 +- **Resolution**: Each house has exactly one of each asset typ
+          +e (BaseConsumption, HeatPump, PV, HomeEvCharger). No distribut
+          +ion ratios — every house gets all asset types.                
+
+❯ not much time left, hurry up                                                  
+
+⏺ Update(docs/weather-requirements.md)
+  ⎿  Added 6 lines, removed 2 lines
+      77      - Persistence: cloud cover changes gradually (random walk w
+          ith configurable step size)
+      78      - Bounded to [0.0, 1.0]
+      79  
+      80 -2. **FR-W5.2** — Cloud cover is updated each simulation step vi
+         -a:                                                             
+      80 +2. **FR-W5.2** — Cloud cover is updated each simulation step vi
+         +a a random walk with seasonal bias and slow mean reversion:    
+      81      ```
+      82 -    cloudCover = clamp(cloudCover + randomWalkStep, 0.0, 1.0)  
+      82 +    seasonalBias = winter ? +winterCloudBias : summer ? +summer
+         +CloudBias : 0                                                  
+      83 +    targetCloud  = clamp(0.5 + seasonalBias, 0.0, 1.0)         
+      84 +    drift        = (rng() - 0.5) * 2 * cloudPersistence * delta
+         +Minutes                                                        
+      85 +    reversion    = (targetCloud - lastCloudCover) * 0.0001 * de
+         +ltaMinutes                                                     
+      86 +    cloudCover   = clamp(lastCloudCover + drift + reversion, 0.
+         +0, 1.0)                                                        
+      87      ```
+      88  
+      89  ### FR-W6: Weather Influence on PV Production
+
+⏺ Update(docs/weather-requirements.md)
+  ⎿  Added 3 lines, removed 2 lines
+      484  ```
+      485  seasonalBias     = season == WINTER ? winterCloudBias : season
+            == SUMMER ? summerCloudBias : 0
+      486  targetCloudBase  = clamp(0.5 + seasonalBias, 0.0, 1.0)
+      487 -drift            = (rng.nextDouble() - 0.5) * 2 * cloudPersist
+          -ence * deltaMinutes                                           
+      488 -cloudCover       = clamp(lastCloudCover + drift, 0.0, 1.0)    
+      487 +drift            = (rng() - 0.5) * 2 * cloudPersistence * delt
+          +aMinutes                                                      
+      488 +reversion        = (targetCloudBase - lastCloudCover) * 0.0001
+          + * deltaMinutes                                               
+      489 +cloudCover       = clamp(lastCloudCover + drift + reversion, 0
+          +.0, 1.0)                                                      
+      490  ```
+      491  
+      492  ### Season Derivation
+
+⏺ Now replace the outdated duplicate class diagram in weather-requirements.md
+  with a reference to the authoritative one.
+
+⏺ Update(docs/weather-requirements.md)
+  ⎿  Added 7 lines, removed 188 lines
+      257  
+      258  ---
+      259  
+      260 -## Class Diagram (Weather and Season Changes)                 
+      260 +## Class Diagram                                              
+      261  
+      262 -```mermaid                                                    
+      263 -classDiagram                                                  
+      264 -    direction TB                                              
+      262 +See `docs/class-diagram.md` for the authoritative, up-to-date 
+          +class diagram covering all components (weather, assets, peak-s
+          +having battery, and engine). The weather-specific classes are:
+      263  
+      266 -    %% ── New types ──────────────────────────────────────────
+      264 +| Class | Responsibility |                                    
+      265 +|-------|---------------|                                     
+      266 +| `Season` (enum) | Enumeration: `WINTER`, `SPRING`, `SUMMER`,
+          + `AUTUMN`. Derived from month via `Season.fromMonth()`. |     
+      267 +| `WeatherCondition` (value object) | Immutable snapshot of we
+          +ather at one time step: `temperature_C`, `irradianceFactor`, `
+          +cloudCover`, `season`, `timestamp`. |                         
+      268 +| `DeterministicWeatherModel` | Concrete implementation using 
+          +sinusoidal seasonal/diurnal curves + PRNG for cloud and noise.
+          + The "interface" is implicit (duck typing): any object with `g
+          +etWeather(Date, rng) -> WeatherCondition` can be swapped in.  
+      269  
+      268 -    class Season {                                            
+      269 -        <<enumeration>>                                       
+      270 -        WINTER                                                
+      271 -        SPRING                                                
+      272 -        SUMMER                                                
+      273 -        AUTUMN                                                
+      274 -    }                                                         
+      275 -                                                              
+      276 -    class WeatherCondition {                                  
+      277 -        <<value object>>                                      
+      278 -        +double temperature_C                                 
+      279 -        +double irradianceFactor                              
+      280 -        +double cloudCover                                    
+      281 -        +Season season                                        
+      282 -        +DateTime timestamp                                   
+      283 -    }                                                         
+      284 -                                                              
+      285 -    class WeatherModel {                                      
+      286 -        <<interface>>                                         
+      287 -        +getWeather(DateTime time, Random rng) WeatherConditio
+          -n                                                             
+      288 -    }                                                         
+      289 -                                                              
+      290 -    class DeterministicWeatherModel {                         
+      291 -        -double latitude                                      
+      292 -        -double annualMeanTemp_C                              
+      293 -        -double annualAmplitude_C                             
+      294 -        -double diurnalAmplitude_C                            
+      295 -        -double noiseRange_C                                  
+      296 -        -double cloudPersistence                              
+      297 -        -double winterCloudBias                               
+      298 -        -double summerCloudBias                               
+      299 -        -double lastCloudCover                                
+      300 -        +getWeather(DateTime time, Random rng) WeatherConditio
+          -n                                                             
+      301 -        -computeTemperature(DateTime) double                  
+      302 -        -computeSolarElevation(DateTime) double               
+      303 -        -computeCloudCover(DateTime, Random) double           
+      304 -        -computeIrradianceFactor(DateTime, double, double) dou
+          -ble                                                           
+      305 -        -deriveSeason(DateTime) Season                        
+      306 -    }                                                         
+      307 -                                                              
+      308 -    %% ── Changed existing classes ───────────────────────────
+      309 -                                                              
+      310 -    class Asset {                                             
+      311 -        <<abstract>>                                          
+      312 -        +String id                                            
+      313 -        +String type                                          
+      314 -        +double currentPower_kW                               
+      315 -        +double cumulativeEnergy_kWh                          
+      316 -        +double powerLimit_kW                                 
+      317 -        +boolean isIdle                                       
+      318 -        +step(double deltaHours, WeatherCondition weather) voi
+          -d                                                             
+      319 -        +reset()                                              
+      320 -    }                                                         
+      321 -                                                              
+      322 -    class PV {                                                
+      323 -        +double peakPower_kWp                                 
+      324 -        +step(double deltaHours, WeatherCondition weather) voi
+          -d                                                             
+      325 -    }                                                         
+      326 -                                                              
+      327 -    class HeatPump {                                          
+      328 -        +double cop                                           
+      329 -        +double thermalLossCoefficient                        
+      330 -        +step(double deltaHours, WeatherCondition weather) voi
+          -d                                                             
+      331 -    }                                                         
+      332 -                                                              
+      333 -    class BaseHouseholdConsumption {                          
+      334 -        +double baseLoad_kW                                   
+      335 -        +double varianceFactor                                
+      336 -        +boolean seasonalModulationEnabled                    
+      337 -        +step(double deltaHours, WeatherCondition weather) voi
+          -d                                                             
+      338 -    }                                                         
+      339 -                                                              
+      340 -    class HomeEVCharger {                                     
+      341 -        +double chargePower_kW                                
+      342 -        +double sessionEnergy_kWh                             
+      343 -        +double sessionRemaining_kWh                          
+      344 -        +step(double deltaHours, WeatherCondition weather) voi
+          -d                                                             
+      345 -    }                                                         
+      346 -                                                              
+      347 -    class PublicEVCharger {                                   
+      348 -        +double chargePower_kW                                
+      349 -        +double sessionEnergy_kWh                             
+      350 -        +double sessionRemaining_kWh                          
+      351 -        +boolean inUse                                        
+      352 -        +step(double deltaHours, WeatherCondition weather) voi
+          -d                                                             
+      353 -    }                                                         
+      354 -                                                              
+      355 -    class SimulationEngine {                                  
+      356 -        +Neighbourhood neighbourhood                          
+      357 -        +SimulationClock clock                                
+      358 -        +WeatherModel weatherModel                            
+      359 -        +Random rng                                           
+      360 -        +long seed                                            
+      361 -        +run()                                                
+      362 -        +pause()                                              
+      363 -        +stepOnce()                                           
+      364 -        +getState() SimulationState                           
+      365 -    }                                                         
+      366 -                                                              
+      367 -    class SimulationState {                                   
+      368 -        +DateTime currentTime                                 
+      369 -        +WeatherCondition currentWeather                      
+      370 -        +double neighbourhoodNetPower_kW                      
+      371 -        +Map~String, Double~ assetCumulativeEnergy            
+      372 -        +List~PowerRecord~ powerHistory24h                    
+      373 -    }                                                         
+      374 -                                                              
+      375 -    class Configuration {                                     
+      376 -        +int numHouses                                        
+      377 -        +int numPublicChargers                                
+      378 -        +double pvRatio                                       
+      379 -        +double heatPumpRatio                                 
+      380 -        +double homeEVRatio                                   
+      381 -        +long randomSeed                                      
+      382 -        +DateTime startDate                                   
+      383 -        +double stepSizeMinutes                               
+      384 -        +Map~String, Object~ assetDefaults                    
+      385 -        +WeatherConfig weatherConfig                          
+      386 -        +loadFromYaml(String path) Configuration$             
+      387 -    }                                                         
+      388 -                                                              
+      389 -    class WeatherConfig {                                     
+      390 -        +double latitude                                      
+      391 -        +double annualMeanTemperature_C                       
+      392 -        +double annualTemperatureAmplitude_C                  
+      393 -        +double diurnalTemperatureAmplitude_C                 
+      394 -        +double temperatureNoiseRange_C                       
+      395 -        +double indoorTargetTemperature_C                     
+      396 -        +double cloudPersistence                              
+      397 -        +double winterCloudBias                               
+      398 -        +double summerCloudBias                               
+      399 -        +boolean enableBaseLoadModulation                     
+      400 -        +double baseLoadSeasonalVariation                     
+      401 -    }                                                         
+      402 -                                                              
+      403 -    %% ── Unchanged (shown for context) ──────────────────────
+      404 -                                                              
+      405 -    class Neighbourhood {                                     
+      406 -        +String name                                          
+      407 -        +List~House~ houses                                   
+      408 -        +List~PublicEVCharger~ publicChargers                 
+      409 -        +getAggregatePower() double                           
+      410 -        +getAggregateCumulativeEnergy() double                
+      411 -        +getPowerHistory() List~PowerRecord~                  
+      412 -    }                                                         
+      413 -                                                              
+      414 -    class SimulationClock {                                   
+      415 -        +DateTime currentTime                                 
+      416 -        +DateTime startTime                                   
+      417 -        +double stepSizeMinutes                               
+      418 -        +double speedMultiplier                               
+      419 -        +boolean isRunning                                    
+      420 -        +tick() DateTime                                      
+      421 -        +pause()                                              
+      422 -        +resume()                                             
+      423 -    }                                                         
+      424 -                                                              
+      425 -    %% ── Relationships ──────────────────────────────────────
+      426 -                                                              
+      427 -    WeatherModel <|-- DeterministicWeatherModel               
+      428 -    DeterministicWeatherModel ..> WeatherCondition : creates  
+      429 -    DeterministicWeatherModel ..> Season : derives            
+      430 -    WeatherCondition --> Season : uses                        
+      431 -                                                              
+      432 -    Asset <|-- PV                                             
+      433 -    Asset <|-- HeatPump                                       
+      434 -    Asset <|-- BaseHouseholdConsumption                       
+      435 -    Asset <|-- HomeEVCharger                                  
+      436 -    Asset <|-- PublicEVCharger                                
+      437 -                                                              
+      438 -    SimulationEngine --> WeatherModel : uses                  
+      439 -    SimulationEngine --> SimulationState : publishes          
+      440 -    SimulationEngine --> Configuration : reads                
+      441 -    SimulationState --> WeatherCondition : contains           
+      442 -                                                              
+      443 -    Configuration --> WeatherConfig : contains                
+      444 -                                                              
+      445 -    Asset ..> WeatherCondition : receives in step()           
+      446 -    PV ..> WeatherCondition : reads irradianceFactor          
+      447 -    HeatPump ..> WeatherCondition : reads temperature_C       
+      448 -    BaseHouseholdConsumption ..> WeatherCondition : reads seas
+          -on, time                                                      
+      449 -```                                                           
+      450 -                                                              
+      270  ---
+      271  
+      272  ## Implementation Notes
+
+⏺ Update(docs/weather-requirements.md)
+  ⎿  Added 1 line, removed 2 lines
+      200  |-------|---------------|
+      201  | `Season` (enum) | Enumeration: `WINTER`, `SPRING`, `SUMMER`,
+            `AUTUMN`. Derived from month. |
+      202  | `WeatherCondition` (value object) | Immutable snapshot of we
+           ather at one time step: `temperature_C`, `irradianceFactor`, `
+           cloudCover`, `season`. |
+      203 -| `WeatherModel` (interface) | Contract: `getWeather(DateTime,
+          - Random) -> WeatherCondition`. Allows swapping implementations
+          -. |                                                           
+      204 -| `DeterministicWeatherModel` | Default implementation using s
+          -inusoidal seasonal/diurnal curves + PRNG for cloud and noise. 
+          -|                                                             
+      203 +| `DeterministicWeatherModel` | Default implementation using s
+          +inusoidal seasonal/diurnal curves + PRNG for cloud and noise. 
+          +No explicit interface class — the contract is duck-typed: any 
+          +object with `getWeather(Date, rng)` works. |                  
+      204  
+      205  ### Changed Classes
+      206  
+
+⏺ Update(docs/weather-requirements.md)
+  ⎿  Added 1 line, removed 1 line
+      206  
+      207  | Class | Change | Rationale |
+      208  |-------|--------|-----------|
+      209 -| `Asset` (abstract) | `step(deltaHours)` → `step(deltaHours, 
+          -weather: WeatherCondition)` | Assets need weather context for 
+          -realistic behaviour. WeatherCondition is a value object so ass
+          -ets that don't use weather can ignore it. |                   
+      209 +| `Asset` (abstract) | `step(deltaHours)` → `step(deltaTimeHou
+          +rs, weather, rng)` | Assets receive weather context for realis
+          +tic behaviour and seeded PRNG for deterministic randomness. As
+          +sets that don't use weather or randomness (e.g. Battery) ignor
+          +e the unused parameters. |                                    
+      210  | `BaseHouseholdConsumption` | `step()` accepts weather; optio
+           nally modulates base load by time-of-day and season | Provides
+            realistic load variation (higher evenings, higher winter). |
+      211  | `HeatPump` | `step()` uses `weather.temperature_C` to comput
+           e heating demand | Temperature is the primary driver of heat p
+           ump consumption. |
+      212  | `PV` | `step()` uses `weather.irradianceFactor` to modulate 
+           production | Replaces random variation with physically-grounde
+           d irradiance model. |
+
+⏺ Update(docs/weather-requirements.md)
+  ⎿  Added 2 lines, removed 2 lines
+      233  
+      234  ### Asset.step() Signature Change
+      235  
+      236 -The signature change from `step(deltaHours)` to `step(deltaHou
+          -rs, weather)` is a **breaking change** to the Asset abstract c
+          -lass and all subclasses. However, it was anticipated in the in
+          -itial design (NFR5.1, NFR5.2) and in the class diagram notes (
+          -"When introduced, assets will receive a Weather object in thei
+          -r step() call").                                              
+      236 +The signature change from `step(deltaHours)` to `step(deltaTim
+          +eHours, weather, rng)` is a **breaking change** to the Asset a
+          +bstract class and all subclasses. However, it was anticipated 
+          +in the initial design (NFR5.1, NFR5.2) and in the class diagra
+          +m notes ("When introduced, assets will receive a Weather objec
+          +t in their step() call").                                     
+      237  
+      238 -Assets that do not respond to weather (e.g., EV chargers) simp
+          -ly ignore the parameter. Assets that do respond (PV, HeatPump,
+          - BaseHouseholdConsumption) use the relevant fields.           
+      238 +Assets that do not respond to weather or randomness (e.g., EV 
+          +chargers ignore weather; Battery ignores both weather and rng)
+          + simply ignore the unused parameters.                         
+      239  
+      240  ### YAML Configuration Additions
+      241  
+
+⏺ Update(docs/weather-requirements.md)
+  ⎿  Added 1 line, removed 1 line
+      142  
+      143  ### NFR-W4: Extensibility
+      144  1. **NFR-W4.1** — The `WeatherCondition` object must be design
+           ed so additional weather variables (wind speed, humidity, etc.
+           ) can be added without breaking the existing `step()` signatur
+           e.
+      145 -2. **NFR-W4.2** — The weather generation algorithm must be swa
+          -ppable (e.g., to plug in real weather data later) via a common
+          - `WeatherModel` interface.                                    
+      145 +2. **NFR-W4.2** — The weather generation algorithm must be swa
+          +ppable (e.g., to plug in real weather data later). The engine 
+          +depends on duck typing — any object with `getWeather(Date, rng
+          +) -> WeatherCondition` works. No explicit interface class is d
+          +efined.                                                       
+      146  
+      147  ---
+      148  
+
+⏺ Update(docs/weather-requirements.md)
+  ⎿  Added 1 line, removed 1 line
+      210  | `BaseHouseholdConsumption` | `step()` accepts weather; optio
+           nally modulates base load by time-of-day and season | Provides
+            realistic load variation (higher evenings, higher winter). |
+      211  | `HeatPump` | `step()` uses `weather.temperature_C` to comput
+           e heating demand | Temperature is the primary driver of heat p
+           ump consumption. |
+      212  | `PV` | `step()` uses `weather.irradianceFactor` to modulate 
+           production | Replaces random variation with physically-grounde
+           d irradiance model. |
+      213 -| `SimulationEngine` | Adds `WeatherModel` dependency; inserts
+          - a weather-update step before stepping assets each tick | Weat
+          -her must be computed once per tick before assets are stepped. 
+          -|                                                             
+      213 +| `SimulationEngine` | Adds `DeterministicWeatherModel` depend
+          +ency; inserts a weather-update step before stepping assets eac
+          +h tick | Weather must be computed once per tick before assets 
+          +are stepped. |                                                
+      214  | `SimulationState` | Adds `WeatherCondition currentWeather` f
+           ield | UI needs weather context for display. |
+      215  | `Configuration` | Adds optional `weather` section with model
+            parameters | Allows tuning of temperature baseline, amplitude
+           , cloud persistence, latitude, etc. |
+      216  
+
+⏺ Update(docs/weather-requirements.md)
+  ⎿  Added 8 lines, removed 8 lines
+      219  ```
+      220  1. Advance SimulationClock
+      221  2. Update Weather: weather = weatherModel.getWeather(clock.cur
+           rentTime, rng)
+      222 -3. Step all assets with (deltaHours, weather):                
+      222 +3. Step all assets with (deltaHours, weather, rng):           
+      223     a. For each House:
+      224 -      - Step BaseHouseholdConsumption                         
+      225 -      - Step HeatPump(s)                                      
+      226 -      - Step PV(s)                                            
+      227 -      - Step HomeEVCharger(s)                                 
+      228 -   b. For each PublicEVCharger:                               
+      229 -      - Step PublicEVCharger                                  
+      224 +      - Step BaseConsumption                                  
+      225 +      - Step HeatPump                                         
+      226 +      - Step PV                                               
+      227 +      - Step HomeEvCharger                                    
+      228 +   b. For each PublicEvCharger:                               
+      229 +      - Step PublicEvCharger                                  
+      230  4. Record aggregate power history
+      231 -5. Publish SimulationState (now includes weather)             
+      231 +5. Publish SimulationState (now includes weather, throttled to
+          + ~10 fps)                                                     
+      232  ```
+      233  
+      234  ### Asset.step() Signature Change
+
+⏺ All three docs updated. Here's a summary of changes:
+
+  docs/class-diagram.md
+  - Added Battery (new Asset subclass with SoC, power limits, round-trip
+  efficiency)
+  - Added PeakShavingController (stateless, 4-rule priority algorithm)
+  - Added Neighbourhood.battery and _rawNetPower_kW()
+  - Added SimulationEngine._lastEmitTime (throttle)
+  - Added SimulationState.battery field
+  - Documented the 4-rule peak-shaving algorithm in design decisions
+  - Added _maxHistoryEntries dynamic sizing note
+
+  docs/requirements.md
+  - FR1.3: "zero or more optional" → "exactly one of each asset type"
+  - FR1.4: Removed non-existent powerLimit_kW from asset tracking requirements
+  - FR2.2: Removed "proportions/ratios" (not implemented), added weather +
+  peak-shaving config
+  - FR3.2: Default step size 1 min → 60 min
+  - FR4.1-4.3: Replaced "random variation (weather deferred)" with actual
+  implemented formulas
+  - FR5.3: Noted dynamic history window sizing
+  - FR5.5: Added battery to energy accounting
+  - FR7.2-7.3: Added weather, battery to state; noted 10fps throttle
+  - Added FR8: Peak-Shaving Battery section
+  - NFR5.1-5.2: Updated from "future" to current implemented state
+  - "Deferred: Weather and Season" → "Implemented: Weather and Season"
+  - All 10 issues marked Resolved where applicable
+
+  docs/weather-requirements.md
+  - FR-W5.2: Cloud cover formula updated to include mean reversion (was missing)
+  - Implementation Notes: Cloud cover formula updated to match actual code
+  - Removed 180-line outdated duplicate class diagram → replaced with a table +
+  reference to docs/class-diagram.md
+  - NFR-W4.2: Noted WeatherModel is implicit duck typing, not an explicit
+  interface
+  - Asset.step() signature documented as (deltaTimeHours, weather, rng)
+  throughout
+  - Class names corrected (BaseHouseholdConsumption → BaseConsumption)
+
+✻ Cogitated for 7m 44s
