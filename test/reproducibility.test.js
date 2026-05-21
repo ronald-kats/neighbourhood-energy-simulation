@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRNG } from '../src/simulation/rng.js';
 import { Neighbourhood } from '../src/model/neighbourhood.js';
+import { DeterministicWeatherModel } from '../src/model/weather-model.js';
 import { loadConfig } from '../src/config/loader.js';
 import { resolve } from 'node:path';
 
@@ -92,20 +93,19 @@ function runSimulation(config, seed, ticks) {
   };
 
   const rng = createRNG(seed);
+  const weatherModel = new DeterministicWeatherModel(config.weather, overrides.simulation.stepSizeMinutes);
   const neighbourhood = new Neighbourhood(overrides);
   const deltaTimeHours = overrides.simulation.stepSizeMinutes / 60;
 
   // Simulate starting from Jan 1
-  let currentHour = 0;
-  let currentMonth = 1;
+  const startDate = new Date('2024-01-01T00:00:00');
 
   for (let t = 0; t < ticks; t++) {
-    const minuteOfDay = t % (24 * 60);
-    currentHour = Math.floor(minuteOfDay / 60);
-    const context = { month: currentMonth, hour: currentHour };
+    const simTime = new Date(startDate.getTime() + t * overrides.simulation.stepSizeMinutes * 60000);
+    const weather = weatherModel.getWeather(simTime, rng);
 
-    neighbourhood.step(deltaTimeHours, rng, context);
-    neighbourhood.recordHistory(new Date(2024, currentMonth - 1, 1, currentHour, minuteOfDay % 60));
+    neighbourhood.step(deltaTimeHours, weather, rng);
+    neighbourhood.recordHistory(simTime);
   }
 
   return {

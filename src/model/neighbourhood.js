@@ -9,7 +9,7 @@ export class Neighbourhood {
   constructor(config) {
     this.houses = [];
     for (let i = 1; i <= config.houses.count; i++) {
-      this.houses.push(new House(i, config.houses));
+      this.houses.push(new House(i, config.houses, config.weather));
     }
 
     const pc = config.publicChargers;
@@ -22,14 +22,14 @@ export class Neighbourhood {
     this.history = [];
   }
 
-  step(deltaTimeHours, rng, context) {
+  step(deltaTimeHours, weather, rng) {
     // Step all houses
     for (const house of this.houses) {
-      house.step(deltaTimeHours, rng, context);
+      house.step(deltaTimeHours, weather, rng);
     }
     // Step public chargers
     for (const charger of this.publicChargers) {
-      charger.step(deltaTimeHours, rng);
+      charger.step(deltaTimeHours, weather, rng);
       charger.updateEnergy(charger.currentPower_kW, deltaTimeHours);
     }
   }

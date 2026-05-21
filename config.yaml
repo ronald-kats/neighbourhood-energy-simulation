@@ -1,7 +1,7 @@
 simulation:
-  stepSizeMinutes: 1
+  stepSizeMinutes: 60
   seed: 12345
-  speedMultiplier: 60
+  speedMultiplier: 3600
   startTime: "2024-01-01T00:00:00"
 
 houses:
@@ -19,6 +19,21 @@ houses:
       chargePower_kW: 7
       sessionsPerDay: 2
       avgSessionDurationHours: 2
+
+weather:
+  latitude: 52.0
+  annualMeanTemperature_C: 10.0
+  annualTemperatureAmplitude_C: 7.0
+  diurnalTemperatureAmplitude_C: 5.0
+  temperatureNoiseRange_C: 1.5
+  indoorTargetTemperature_C: 20.0
+  thermalLossCoefficient: 0.15
+  cop: 3.5
+  cloudPersistence: 0.02
+  winterCloudBias: 0.3
+  summerCloudBias: -0.1
+  enableBaseLoadModulation: true
+  baseLoadSeasonalVariation: 0.2
 
 publicChargers:
   count: 6

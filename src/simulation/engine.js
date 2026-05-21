@@ -1,10 +1,11 @@
 import { SimulationClock } from './clock.js';
 import { createRNG } from './rng.js';
 import { Neighbourhood } from '../model/neighbourhood.js';
+import { DeterministicWeatherModel } from '../model/weather-model.js';
 
 /**
  * SimulationEngine — orchestrates the tick loop.
- * Each tick: advance clock → step all assets → record history → emit state via callback.
+ * Each tick: advance clock → compute weather → step all assets → record history → emit state via callback.
  */
 export class SimulationEngine {
   constructor(config, onTick) {
@@ -16,8 +17,11 @@ export class SimulationEngine {
     this.clock.setSpeed(this.speedMultiplier);
     this.rng = createRNG(config.simulation.seed);
     this.neighbourhood = new Neighbourhood(config);
+    this.weatherModel = new DeterministicWeatherModel(config.weather, this.stepSizeMinutes);
 
+    this._currentWeather = null;
     this._intervalId = null;
+    this._lastEmitTime = 0;
   }
 
   /** Start the simulation loop. */
@@ -79,23 +83,24 @@ export class SimulationEngine {
   _tick() {
     const deltaTimeHours = this.stepSizeMinutes / 60;
 
-    // Context for season/time-aware assets
-    const context = {
-      month: this.clock.month,
-      hour: this.clock.hour,
-    };
-
     // Advance the clock
     this.clock.advance(this.stepSizeMinutes);
 
-    // Step the neighbourhood
-    this.neighbourhood.step(deltaTimeHours, this.rng, context);
+    // Compute weather for the new time
+    this._currentWeather = this.weatherModel.getWeather(this.clock.currentTime, this.rng);
+
+    // Step the neighbourhood with weather
+    this.neighbourhood.step(deltaTimeHours, this._currentWeather, this.rng);
     this.neighbourhood.recordHistory(this.clock.currentTime);
 
-    // Emit state
-    const state = this._buildState();
-    if (this.onTick) {
-      this.onTick(state);
+    // Throttle state emission to ~10fps to keep the UI responsive
+    const now = Date.now();
+    if (now - this._lastEmitTime >= 100) {
+      this._lastEmitTime = now;
+      const state = this._buildState();
+      if (this.onTick) {
+        this.onTick(state);
+      }
     }
   }
 
@@ -107,6 +112,13 @@ export class SimulationEngine {
       speedMultiplier: this.speedMultiplier,
       isRunning: this.clock.isRunning,
       netPower_kW: this.neighbourhood.netPower_kW,
+      currentWeather: this._currentWeather ? {
+        temperature_C: this._currentWeather.temperature_C,
+        irradianceFactor: this._currentWeather.irradianceFactor,
+        cloudCover: this._currentWeather.cloudCover,
+        season: this._currentWeather.season,
+        timestamp: this._currentWeather.timestamp.toISOString(),
+      } : null,
       history: this.neighbourhood.history.map(h => ({
         time: h.time.toISOString(),
         netPower_kW: h.netPower_kW,

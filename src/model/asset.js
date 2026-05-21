@@ -12,9 +12,10 @@ export class Asset {
   /**
    * Advance the asset by one time step.
    * @param {number} deltaTimeHours — time step in hours
+   * @param {import('./weather-condition.js').WeatherCondition} weather — current weather
    * @param {() => number} rng — seeded PRNG function returning [0,1)
    */
-  step(deltaTimeHours, rng) {
+  step(deltaTimeHours, weather, rng) {
     throw new Error(`Asset "${this.name}" must implement step()`);
   }
 

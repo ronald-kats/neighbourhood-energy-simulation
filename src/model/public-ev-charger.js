@@ -15,9 +15,10 @@ export class PublicEvCharger extends Asset {
 
   /**
    * @param {number} deltaTimeHours
+   * @param {import('./weather-condition.js').WeatherCondition} _weather
    * @param {() => number} rng
    */
-  step(deltaTimeHours, rng) {
+  step(deltaTimeHours, _weather, rng) {
     if (this._sessionRemainingHours > 0) {
       this._sessionRemainingHours -= deltaTimeHours;
       this.currentPower_kW = this._sessionRemainingHours > 0 ? this.chargePower_kW : 0;

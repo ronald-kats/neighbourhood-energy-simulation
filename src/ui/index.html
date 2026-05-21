@@ -49,9 +49,10 @@
   <button id="btn-play" onclick="control('play')">▶ Play</button>
   <button id="btn-pause" onclick="control('pause')">⏸ Pause</button>
   <span style="color:#94a3b8;font-size:0.85em;">Speed:</span>
-  <button class="speed-btn" data-speed="1" onclick="control('setSpeed', 1)">1×</button>
-  <button class="speed-btn active" data-speed="60" onclick="control('setSpeed', 60)">60×</button>
-  <button class="speed-btn" data-speed="3600" onclick="control('setSpeed', 3600)">3600×</button>
+  <button class="speed-btn" data-speed="3600" onclick="control('setSpeed', 3600)">1h/s</button>
+  <button class="speed-btn active" data-speed="21600" onclick="control('setSpeed', 21600)">6h/s</button>
+  <button class="speed-btn" data-speed="86400" onclick="control('setSpeed', 86400)">1d/s</button>
+  <button class="speed-btn" data-speed="432000" onclick="control('setSpeed', 432000)">5d/s</button>
 </div>
 
 <div id="main">
@@ -61,6 +62,12 @@
         <div id="gauge-value">--</div>
         <div id="gauge-label">kW net</div>
         <div style="font-size:0.8em;color:#94a3b8;margin-top:6px;" id="gauge-breakdown"></div>
+      </div>
+      <div style="text-align:center;border-left:1px solid #334155;padding-left:20px;">
+        <div style="font-size:0.85em;color:#94a3b8;">Weather</div>
+        <div style="font-size:1.2em;font-weight:600;" id="weather-temp">--</div>
+        <div style="font-size:0.8em;color:#94a3b8;">Cloud: <span id="weather-cloud">--</span></div>
+        <div style="font-size:0.8em;color:#94a3b8;">Irradiance: <span id="weather-irradiance">--</span></div>
       </div>
     </div>
     <div id="chart-container">
@@ -158,6 +165,14 @@ function updateUI(state) {
   gaugeEl.textContent = netPower.toFixed(1) + ' kW';
   gaugeEl.className = netPower >= 0 ? 'positive' : 'negative';
   document.getElementById('gauge-label').textContent = netPower >= 0 ? 'net consumption' : 'net generation';
+
+  // Weather display
+  if (state.currentWeather) {
+    const w = state.currentWeather;
+    document.getElementById('weather-temp').textContent = w.temperature_C.toFixed(1) + ' °C';
+    document.getElementById('weather-cloud').textContent = (w.cloudCover * 100).toFixed(0) + '%';
+    document.getElementById('weather-irradiance').textContent = w.irradianceFactor.toFixed(3);
+  }
 
   // Breakdown: houses vs public chargers
   if (state.publicChargers && state.houses) {

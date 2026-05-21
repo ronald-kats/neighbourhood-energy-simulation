@@ -9,23 +9,46 @@ import { HomeEvCharger } from './home-ev-charger.js';
  * Power limit caps net consumption (import from grid).
  */
 export class House {
-  constructor(id, config) {
+  /**
+   * @param {number} id
+   * @param {object} housesConfig — the houses section of the parsed config
+   * @param {object} weatherConfig — the weather section of the parsed config
+   */
+  constructor(id, housesConfig, weatherConfig) {
     this.id = id;
-    this.powerLimit_kW = config.powerLimit_kW;
+    this.powerLimit_kW = housesConfig.powerLimit_kW;
 
-    const a = config.assets;
+    const a = housesConfig.assets;
+    const w = weatherConfig;
     this.assets = [
-      new BaseConsumption(`House${id}-BaseLoad`, a.baseConsumption.baseLoad_kW, a.baseConsumption.variance_kW),
-      new HeatPump(`House${id}-HeatPump`, a.heatPump.maxPower_kW),
+      new BaseConsumption(
+        `House${id}-BaseLoad`,
+        a.baseConsumption.baseLoad_kW,
+        a.baseConsumption.variance_kW,
+        w.enableBaseLoadModulation,
+        w.baseLoadSeasonalVariation,
+      ),
+      new HeatPump(
+        `House${id}-HeatPump`,
+        a.heatPump.maxPower_kW,
+        w.indoorTargetTemperature_C,
+        w.thermalLossCoefficient,
+        w.cop,
+      ),
       new PV(`House${id}-PV`, a.pv.peakPower_kW),
-      new HomeEvCharger(`House${id}-EVCharger`, a.homeEvCharger.chargePower_kW, a.homeEvCharger.sessionsPerDay, a.homeEvCharger.avgSessionDurationHours),
+      new HomeEvCharger(
+        `House${id}-EVCharger`,
+        a.homeEvCharger.chargePower_kW,
+        a.homeEvCharger.sessionsPerDay,
+        a.homeEvCharger.avgSessionDurationHours,
+      ),
     ];
   }
 
   /** Step all assets and return net power (positive = consumption, negative = generation). */
-  step(deltaTimeHours, rng, context) {
+  step(deltaTimeHours, weather, rng) {
     for (const asset of this.assets) {
-      asset.step(deltaTimeHours, rng, context);
+      asset.step(deltaTimeHours, weather, rng);
     }
     // Accumulate energy for each asset
     for (const asset of this.assets) {
