@@ -69,6 +69,12 @@
         <div style="font-size:0.8em;color:#94a3b8;">Cloud: <span id="weather-cloud">--</span></div>
         <div style="font-size:0.8em;color:#94a3b8;">Irradiance: <span id="weather-irradiance">--</span></div>
       </div>
+      <div id="battery-display" style="text-align:center;border-left:1px solid #334155;padding-left:20px;display:none;">
+        <div style="font-size:0.85em;color:#94a3b8;">Battery</div>
+        <div style="font-size:1.2em;font-weight:600;" id="battery-power">--</div>
+        <div style="font-size:0.8em;color:#94a3b8;">SoC: <span id="battery-soc">--</span></div>
+        <div style="font-size:0.8em;color:#94a3b8;">Energy: <span id="battery-energy">--</span></div>
+      </div>
     </div>
     <div id="chart-container">
       <canvas id="chart"></canvas>
@@ -174,12 +180,34 @@ function updateUI(state) {
     document.getElementById('weather-irradiance').textContent = w.irradianceFactor.toFixed(3);
   }
 
-  // Breakdown: houses vs public chargers
+  // Battery display
+  const batteryEl = document.getElementById('battery-display');
+  if (state.battery) {
+    batteryEl.style.display = '';
+    const b = state.battery;
+    const bPwr = b.currentPower_kW;
+    const bPwrClass = bPwr > 0.01 ? 'positive' : bPwr < -0.01 ? 'negative' : '';
+    document.getElementById('battery-power').innerHTML =
+      `<span class="${bPwrClass}">${bPwr.toFixed(1)} kW</span>`;
+    document.getElementById('battery-soc').textContent =
+      (b.socFraction * 100).toFixed(1) + '% (' + b.stateOfCharge_kWh.toFixed(0) + ' kWh)';
+    document.getElementById('battery-energy').textContent =
+      b.cumulativeEnergy_kWh.toFixed(2) + ' kWh';
+  } else {
+    batteryEl.style.display = 'none';
+  }
+
+  // Breakdown: houses vs public chargers vs battery
   if (state.publicChargers && state.houses) {
     const chargerPower = state.publicChargers.reduce((sum, c) => sum + c.currentPower_kW, 0);
     const housePower = state.houses.reduce((sum, h) => sum + h.netPower_kW, 0);
-    document.getElementById('gauge-breakdown').innerHTML =
-      `Houses: <span class="${housePower >= 0 ? 'positive' : 'negative'}">${housePower.toFixed(1)} kW</span> &nbsp;|&nbsp; Chargers: <span class="${chargerPower > 0 ? 'positive' : ''}">${chargerPower.toFixed(1)} kW</span>`;
+    let parts = `Houses: <span class="${housePower >= 0 ? 'positive' : 'negative'}">${housePower.toFixed(1)} kW</span> &nbsp;|&nbsp; Chargers: <span class="${chargerPower > 0 ? 'positive' : ''}">${chargerPower.toFixed(1)} kW</span>`;
+    if (state.battery) {
+      const bPwr = state.battery.currentPower_kW;
+      const bClass = bPwr > 0.01 ? 'positive' : bPwr < -0.01 ? 'negative' : '';
+      parts += ` &nbsp;|&nbsp; Battery: <span class="${bClass}">${bPwr.toFixed(1)} kW</span>`;
+    }
+    document.getElementById('gauge-breakdown').innerHTML = parts;
   }
 
   // Chart: show last 24h of data

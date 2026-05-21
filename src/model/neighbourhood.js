@@ -1,8 +1,10 @@
 import { House } from './house.js';
 import { PublicEvCharger } from './public-ev-charger.js';
+import { Battery } from './battery.js';
+import { PeakShavingController } from './peak-shaving-controller.js';
 
 /**
- * The neighbourhood: all houses + public EV chargers.
+ * The neighbourhood: all houses + public EV chargers + optional peak-shaving battery.
  * Tracks aggregate power and a rolling 24-hour history.
  */
 export class Neighbourhood {
@@ -18,7 +20,17 @@ export class Neighbourhood {
       this.publicChargers.push(new PublicEvCharger(`Public-EV-${i}`, pc.chargePower_kW, pc.sessionsPerDay, pc.avgSessionDurationHours));
     }
 
-    // 24-hour history, one entry per step (e.g. 1440 entries at 1-min steps)
+    // Peak-shaving battery (neighbourhood-level)
+    if (config.peakShaving && config.peakShaving.enabled) {
+      this.battery = new Battery('Neighbourhood-Battery', config.peakShaving);
+      this._peakShavingConfig = config.peakShaving;
+    } else {
+      this.battery = null;
+      this._peakShavingConfig = null;
+    }
+
+    // 24-hour history — size depends on step size
+    this._maxHistoryEntries = Math.ceil((24 * 60) / config.simulation.stepSizeMinutes);
     this.history = [];
   }
 
@@ -32,17 +44,32 @@ export class Neighbourhood {
       charger.step(deltaTimeHours, weather, rng);
       charger.updateEnergy(charger.currentPower_kW, deltaTimeHours);
     }
+
+    // Peak-shaving: compute and apply battery power
+    if (this.battery) {
+      const rawNet = this._rawNetPower_kW();
+      const targetPower = PeakShavingController.compute(
+        rawNet, this.battery, this._peakShavingConfig, deltaTimeHours,
+      );
+      this.battery.applyTargetPower(deltaTimeHours, targetPower);
+      this.battery.updateEnergy(this.battery.currentPower_kW, deltaTimeHours);
+    }
   }
 
-  /** Total net power of the entire neighbourhood (kW). Positive = net consumption. */
+  /** Raw net power (houses + chargers only, before battery). */
+  _rawNetPower_kW() {
+    let total = 0;
+    for (const house of this.houses) total += house.netPower_kW;
+    for (const charger of this.publicChargers) total += charger.currentPower_kW;
+    return Math.round(total * 100) / 100;
+  }
+
+  /** Total net power including battery (positive = net consumption). */
   get netPower_kW() {
     let total = 0;
-    for (const house of this.houses) {
-      total += house.netPower_kW;
-    }
-    for (const charger of this.publicChargers) {
-      total += charger.currentPower_kW;
-    }
+    for (const house of this.houses) total += house.netPower_kW;
+    for (const charger of this.publicChargers) total += charger.currentPower_kW;
+    if (this.battery) total += this.battery.currentPower_kW;
     return Math.round(total * 100) / 100;
   }
 
@@ -53,10 +80,9 @@ export class Neighbourhood {
       netPower_kW: this.netPower_kW,
     });
 
-    // Keep only last 24 hours
-    const maxEntries = 24 * 60; // 1440 entries for 1-min steps
-    if (this.history.length > maxEntries) {
-      this.history = this.history.slice(-maxEntries);
+    // Keep only the configured window
+    if (this.history.length > this._maxHistoryEntries) {
+      this.history = this.history.slice(-this._maxHistoryEntries);
     }
   }
 }

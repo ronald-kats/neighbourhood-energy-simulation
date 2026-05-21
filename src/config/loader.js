@@ -69,5 +69,16 @@ export function loadConfig(filePath) {
       sessionsPerDay: parsed.publicChargers.sessionsPerDay ?? 10,
       avgSessionDurationHours: parsed.publicChargers.avgSessionDurationHours ?? 1,
     },
+    peakShaving: {
+      enabled: parsed.peakShaving?.enabled ?? false,
+      batteryCapacity_kWh: parsed.peakShaving?.batteryCapacity_kWh ?? 500,
+      maxChargePower_kW: parsed.peakShaving?.maxChargePower_kW ?? 250,
+      maxDischargePower_kW: parsed.peakShaving?.maxDischargePower_kW ?? 250,
+      peakThreshold_kW: parsed.peakShaving?.peakThreshold_kW ?? 120,
+      roundTripEfficiency: parsed.peakShaving?.roundTripEfficiency ?? 0.90,
+      minSocFraction: parsed.peakShaving?.minSocFraction ?? 0.10,
+      maxSocFraction: parsed.peakShaving?.maxSocFraction ?? 0.90,
+      initialSocFraction: parsed.peakShaving?.initialSocFraction ?? 0.50,
+    },
   };
 }

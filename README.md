@@ -126,3 +126,32 @@ neighbourhood-energy-simulation/
 - **Runtime**: [js-yaml](https://www.npmjs.com/package/js-yaml) (YAML config parsing)
 - **Browser**: [Chart.js 4.4](https://www.chartjs.org/) (loaded via CDN)
 - **No other npm or runtime dependencies**
+
+## Requirements
+- Can be found in docs subfolder:
+  - requirements.md: all requirements from assignment
+  - weather-requirements: additional requirements for seasonal effects
+  - peak-shaving.md: additional peak-shaving requirements
+
+## Known limitations:
+- Simple model with randomized values: 
+- It should have ability to run realistic scripts
+- Using external data for values instead of random values, preferably from API’s with real time data or realistic data sets
+- Connect to weather API’s for realistic weather simulation
+- More complex logic needed for simulation
+- Neighbourhood model’s layout is simple, normally more complex configurations. This should be possible to configure as well
+- Only one configuration from yaml file, not very user friendly
+- Speed control should be more advanced so you can simulate a day in small steps but also seasons in bigger steps
+- The current setup with a list of assets and houses isn’t really scalable
+
+
+
+## Assumptions:
+- All assets have more or less random power characteristics
+- Assets can’t fail
+- No complex EV charging profiles supported
+- No PV curtailing
+- Not taking power factors into account
+- Yaml configuration file is always correct
+- Summer has more sun than winter
+- All assets are directly connected to house

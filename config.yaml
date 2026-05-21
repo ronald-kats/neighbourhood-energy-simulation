@@ -40,3 +40,14 @@ publicChargers:
   chargePower_kW: 22
   sessionsPerDay: 10
   avgSessionDurationHours: 1
+
+peakShaving:
+  enabled: true
+  batteryCapacity_kWh: 500
+  maxChargePower_kW: 250
+  maxDischargePower_kW: 250
+  peakThreshold_kW: 120
+  roundTripEfficiency: 0.90
+  minSocFraction: 0.10
+  maxSocFraction: 0.90
+  initialSocFraction: 0.50
