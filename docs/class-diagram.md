@@ -90,6 +90,28 @@ classDiagram
         +step(double deltaHours, WeatherCondition weather, Random rng) void
     }
 
+    class Battery {
+        +double capacity_kWh
+        +double maxChargePower_kW
+        +double maxDischargePower_kW
+        +double minSocFraction
+        +double maxSocFraction
+        +double roundTripEfficiency
+        +double stateOfCharge_kWh
+        +double currentPower_kW
+        +double socFraction
+        +double targetSoc
+        +double availableDischargeEnergy_kWh
+        +double availableChargeCapacity_kWh
+        +step(double, WeatherCondition, Random) void
+        +applyTargetPower(double deltaHours, double targetPower) void
+    }
+
+    class PeakShavingController {
+        <<stateless>>
+        +compute(double rawNet, Battery battery, Object config, double deltaHours) double$
+    }
+
     %% ── Composition ────────────────────────────────────────
 
     class House {
@@ -103,10 +125,12 @@ classDiagram
     class Neighbourhood {
         +List~House~ houses
         +List~PublicEvCharger~ publicChargers
+        +Battery battery
         +List~HistoryEntry~ history
         +double netPower_kW
         +step(double deltaHours, WeatherCondition weather, Random rng) void
         +recordHistory(Date clockTime) void
+        -_rawNetPower_kW() double
     }
 
     %% ── Engine & Server ────────────────────────────────────
@@ -138,6 +162,7 @@ classDiagram
         -_tick() void
         -_scheduleTick() void
         -_buildState() SimulationState
+        -_lastEmitTime int
     }
 
     class SimulationState {
@@ -151,6 +176,7 @@ classDiagram
         +List~HistoryEntry~ history
         +List~HouseState~ houses
         +List~ChargerState~ publicChargers
+        +BatteryState battery
     }
 
     %% ── Inheritance ────────────────────────────────────────
@@ -160,17 +186,22 @@ classDiagram
     Asset <|-- PV
     Asset <|-- HomeEvCharger
     Asset <|-- PublicEvCharger
+    Asset <|-- Battery
 
     %% ── Relationships ──────────────────────────────────────
 
     Neighbourhood "1" *-- "30" House
     Neighbourhood "1" *-- "6" PublicEvCharger
+    Neighbourhood "1" o-- "0..1" Battery : optional peak-shaving
     House "1" *-- "4" Asset : (BaseConsumption, HeatPump, PV, HomeEvCharger)
 
     SimulationEngine --> Neighbourhood
     SimulationEngine --> SimulationClock
     SimulationEngine --> DeterministicWeatherModel
     SimulationEngine ..> SimulationState : emits via onTick
+
+    Neighbourhood --> PeakShavingController : uses
+    PeakShavingController ..> Battery : reads state, computes target
 
     DeterministicWeatherModel ..> WeatherCondition : creates
     WeatherCondition --> Season : uses
@@ -190,18 +221,19 @@ Each asset type extends a base `Asset` class because they share common accountin
 ### Asset.step() signature: `step(deltaTimeHours, weather, rng)`
 Assets receive three parameters each tick:
 - **`deltaTimeHours`** — the simulation step size in hours, for energy accounting
-- **`weather`** — a `WeatherCondition` value object with temperature, irradiance, cloud cover, and season. Assets that don't respond to weather (e.g. EV chargers) simply ignore it.
+- **`weather`** — a `WeatherCondition` value object with temperature, irradiance, cloud cover, and season. Assets that don't respond to weather (EV chargers, battery) simply ignore it.
 - **`rng`** — the seeded PRNG function, for deterministic stochastic behaviour
-
-This was designed from the start to accommodate weather (NFR5.1, NFR5.2).
 
 ### SimulationEngine tick sequence
 Each tick the engine:
 1. Advances the `SimulationClock` by `stepSizeMinutes`
 2. Computes weather: `weatherModel.getWeather(clock.currentTime, rng)`
-3. Steps the neighbourhood: recursively steps all houses (each steps its 4 assets) and public chargers
-4. Records aggregate power history (rolling 24-hour window)
-5. Builds and emits `SimulationState` via the `onTick` callback
+3. Steps the neighbourhood:
+   - Steps all houses (each steps its 4 assets and accumulates energy)
+   - Steps all public EV chargers
+   - If peak-shaving is enabled: computes and applies battery target power via `PeakShavingController`
+4. Records aggregate power history (rolling 24-hour window, sized dynamically from step size)
+5. Builds and emits `SimulationState` via the `onTick` callback (throttled to ~10 fps)
 
 ### Public EV chargers at neighbourhood level
 Public chargers belong to the neighbourhood (not houses) because they are shared infrastructure. Their usage model simulates independent random vehicle arrivals/departures.
@@ -215,10 +247,20 @@ house.netPower = baseLoad.power + heatPump.power + evCharger.power - pv.power
 ```
 
 ### Weather model: deterministic, sinusoidal + PRNG noise
-The `DeterministicWeatherModel` generates weather from the simulated date/time and the seeded PRNG — no external APIs. Temperature uses a sinusoidal annual curve (peak July, trough January) plus a diurnal curve (peak 14:00, trough 04:00) plus small PRNG noise. Irradiance uses solar geometry (declination, hour angle, latitude) attenuated by cloud cover. Cloud cover is a bounded random walk with seasonal bias and mean reversion.
+The `DeterministicWeatherModel` generates weather from the simulated date/time and the seeded PRNG — no external APIs. Temperature uses a sinusoidal annual curve (peak July, trough January) plus a diurnal curve (peak 14:00, trough 04:00) plus small PRNG noise. Irradiance uses solar geometry (declination, hour angle, latitude) attenuated by cloud cover. Cloud cover is a bounded random walk with seasonal bias and slow mean reversion.
+
+### Peak-shaving battery (optional)
+A neighbourhood-level battery can be enabled via the `peakShaving.enabled` config flag. The stateless `PeakShavingController` evaluates four rules in priority order each tick:
+
+1. **Peak shaving** — if raw net power exceeds the configured threshold, the battery discharges to shave the peak
+2. **Solar charging** — if raw net power is negative (excess generation), the battery charges from the surplus
+3. **SoC rebalancing** — if the battery is below its target SoC midpoint, it gently charges at 25% of max rate
+4. **Idle** — otherwise, the battery does nothing
+
+The battery enforces physical constraints: SoC bounds (`minSocFraction`–`maxSocFraction`), power limits (`maxChargePower_kW`, `maxDischargePower_kW`), and round-trip efficiency (applied as `sqrt(efficiency)` per direction).
 
 ### Seeded PRNG for full reproducibility
-All randomness flows through a single seeded mulberry32 PRNG. The same seed + config + start time always produces identical results — simulation state, weather, and asset behaviour are fully deterministic.
+All randomness flows through a single seeded mulberry32 PRNG. The same seed + config + start time always produces identical results — simulation state, weather, and asset behaviour are fully deterministic. The battery and peak-shaving controller are purely algorithmic (no randomness).
 
 ### Server/UI: callback-based decoupling
 The HTTP server (`server.js`) receives state via the engine's `onTick` callback and broadcasts to SSE clients. The engine has no knowledge of HTTP, SSE, or the browser. The server wraps the `onTick` callback — it does not import or depend on simulation internals beyond the `SimulationState` shape.
