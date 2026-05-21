@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neighbourhood Energy Simulation</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #0f172a; color: #e2e8f0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+  #topbar { display: flex; align-items: center; gap: 16px; padding: 12px 20px; background: #1e293b; border-bottom: 1px solid #334155; flex-shrink: 0; }
+  #topbar .time { font-size: 1.1em; font-weight: 600; min-width: 260px; }
+  #topbar .season { background: #334155; padding: 4px 12px; border-radius: 6px; font-size: 0.9em; }
+  #topbar button { padding: 8px 16px; border: 1px solid #475569; background: #334155; color: #e2e8f0; border-radius: 6px; cursor: pointer; font-size: 0.9em; transition: background 0.15s; }
+  #topbar button:hover { background: #475569; }
+  #topbar button.active { background: #3b82f6; border-color: #3b82f6; }
+  #topbar .spacer { flex: 1; }
+  #main { display: flex; gap: 16px; padding: 16px; flex: 1; min-height: 0; }
+  #chart-panel { flex: 1; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  #gauge-container { display: flex; align-items: center; justify-content: center; gap: 20px; padding: 16px; background: #1e293b; border-radius: 10px; }
+  #gauge { width: 200px; height: 200px; }
+  #gauge-value { font-size: 2em; font-weight: 700; }
+  #gauge-label { font-size: 0.85em; color: #94a3b8; }
+  #chart-container { flex: 1; background: #1e293b; border-radius: 10px; padding: 16px; min-height: 0; position: relative; }
+  #chart-container canvas { width: 100% !important; height: 100% !important; }
+  #houses-panel { width: 360px; background: #1e293b; border-radius: 10px; padding: 12px; overflow-y: auto; flex-shrink: 0; display: flex; flex-direction: column; gap: 12px; }
+  #houses-panel h3 { font-size: 0.95em; color: #94a3b8; }
+  #houses-list { display: flex; flex-direction: column; gap: 6px; }
+  .section-divider { border: none; border-top: 2px solid #475569; margin: 4px 0; }
+  .charger-card { background: #1e3a5f; border: 1px solid #2563eb; border-radius: 8px; padding: 8px 10px; font-size: 0.82em; }
+  .charger-card .charger-id { font-weight: 600; color: #60a5fa; margin-bottom: 2px; }
+  .charger-card .charger-stats { display: flex; justify-content: space-between; color: #94a3b8; }
+  .house-card { background: #0f172a; border-radius: 8px; padding: 10px; margin-bottom: 8px; font-size: 0.82em; }
+  .house-card .house-id { font-weight: 600; margin-bottom: 4px; }
+  .house-card .asset-row { display: flex; justify-content: space-between; color: #94a3b8; padding: 1px 0; }
+  .house-card .asset-power { color: #facc15; min-width: 50px; text-align: right; }
+  .house-card .asset-energy { color: #60a5fa; min-width: 70px; text-align: right; font-variant-numeric: tabular-nums; }
+  .house-card .net-power { font-weight: 600; margin-top: 4px; padding-top: 4px; border-top: 1px solid #334155; }
+  .positive { color: #f87171; }
+  .negative { color: #4ade80; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <span class="time" id="time">--</span>
+  <span class="season" id="season">--</span>
+  <span class="spacer"></span>
+  <button id="btn-play" onclick="control('play')">▶ Play</button>
+  <button id="btn-pause" onclick="control('pause')">⏸ Pause</button>
+  <span style="color:#94a3b8;font-size:0.85em;">Speed:</span>
+  <button class="speed-btn" data-speed="3600" onclick="control('setSpeed', 3600)">1h/s</button>
+  <button class="speed-btn active" data-speed="21600" onclick="control('setSpeed', 21600)">6h/s</button>
+  <button class="speed-btn" data-speed="86400" onclick="control('setSpeed', 86400)">1d/s</button>
+  <button class="speed-btn" data-speed="432000" onclick="control('setSpeed', 432000)">5d/s</button>
+</div>
+
+<div id="main">
+  <div id="chart-panel">
+    <div id="gauge-container">
+      <div style="text-align:center;">
+        <div id="gauge-value">--</div>
+        <div id="gauge-label">kW net</div>
+        <div style="font-size:0.8em;color:#94a3b8;margin-top:6px;" id="gauge-breakdown"></div>
+      </div>
+      <div style="text-align:center;border-left:1px solid #334155;padding-left:20px;">
+        <div style="font-size:0.85em;color:#94a3b8;">Weather</div>
+        <div style="font-size:1.2em;font-weight:600;" id="weather-temp">--</div>
+        <div style="font-size:0.8em;color:#94a3b8;">Cloud: <span id="weather-cloud">--</span></div>
+        <div style="font-size:0.8em;color:#94a3b8;">Irradiance: <span id="weather-irradiance">--</span></div>
+      </div>
+    </div>
+    <div id="chart-container">
+      <canvas id="chart"></canvas>
+    </div>
+  </div>
+  <div id="houses-panel">
+    <h3>Public EV Chargers</h3>
+    <div id="chargers-list"></div>
+    <hr class="section-divider">
+    <h3>Houses &amp; Assets</h3>
+    <div id="houses-list"></div>
+  </div>
+</div>
+
+<script>
+let chart;
+
+function initChart() {
+  const ctx = document.getElementById('chart').getContext('2d');
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [{
+        label: 'Net Power (kW)',
+        data: [],
+        borderColor: '#3b82f6',
+        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+        fill: true,
+        pointRadius: 0,
+        tension: 0.3,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      scales: {
+        x: {
+          ticks: { color: '#94a3b8', maxTicksLimit: 12, maxRotation: 0 },
+          grid: { color: '#334155' },
+        },
+        y: {
+          ticks: { color: '#94a3b8' },
+          grid: { color: '#334155' },
+          title: { display: true, text: 'kW', color: '#94a3b8' },
+        },
+      },
+      plugins: {
+        legend: { labels: { color: '#94a3b8' } },
+      },
+    },
+  });
+}
+
+async function control(action, value) {
+  await fetch('/control', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, value }),
+  });
+  // Update speed button states
+  if (action === 'setSpeed') {
+    document.querySelectorAll('.speed-btn').forEach(b => b.classList.toggle('active', Number(b.dataset.speed) === value));
+  }
+}
+
+function formatTime(iso) {
+  const d = new Date(iso);
+  return d.toLocaleString('en-GB', { weekday:'short', year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+}
+
+function formatShortTime(iso) {
+  const d = new Date(iso);
+  return d.toLocaleString('en-GB', { hour:'2-digit', minute:'2-digit' });
+}
+
+function updateUI(state) {
+  document.getElementById('time').textContent = state.displayTime || formatTime(state.time);
+  document.getElementById('season').textContent = state.season;
+
+  // Play/pause buttons
+  document.getElementById('btn-play').classList.toggle('active', state.isRunning);
+  document.getElementById('btn-pause').classList.toggle('active', !state.isRunning);
+
+  // Speed buttons
+  document.querySelectorAll('.speed-btn').forEach(b => {
+    b.classList.toggle('active', Number(b.dataset.speed) === state.speedMultiplier);
+  });
+
+  // Gauge
+  const netPower = state.netPower_kW;
+  const gaugeEl = document.getElementById('gauge-value');
+  gaugeEl.textContent = netPower.toFixed(1) + ' kW';
+  gaugeEl.className = netPower >= 0 ? 'positive' : 'negative';
+  document.getElementById('gauge-label').textContent = netPower >= 0 ? 'net consumption' : 'net generation';
+
+  // Weather display
+  if (state.currentWeather) {
+    const w = state.currentWeather;
+    document.getElementById('weather-temp').textContent = w.temperature_C.toFixed(1) + ' °C';
+    document.getElementById('weather-cloud').textContent = (w.cloudCover * 100).toFixed(0) + '%';
+    document.getElementById('weather-irradiance').textContent = w.irradianceFactor.toFixed(3);
+  }
+
+  // Breakdown: houses vs public chargers
+  if (state.publicChargers && state.houses) {
+    const chargerPower = state.publicChargers.reduce((sum, c) => sum + c.currentPower_kW, 0);
+    const housePower = state.houses.reduce((sum, h) => sum + h.netPower_kW, 0);
+    document.getElementById('gauge-breakdown').innerHTML =
+      `Houses: <span class="${housePower >= 0 ? 'positive' : 'negative'}">${housePower.toFixed(1)} kW</span> &nbsp;|&nbsp; Chargers: <span class="${chargerPower > 0 ? 'positive' : ''}">${chargerPower.toFixed(1)} kW</span>`;
+  }
+
+  // Chart: show last 24h of data
+  if (state.history && state.history.length > 0) {
+    const labels = state.history.map(h => formatShortTime(h.time));
+    const data = state.history.map(h => h.netPower_kW);
+    chart.data.labels = labels;
+    chart.data.datasets[0].data = data;
+    chart.update('none');
+  }
+
+  // Public chargers list
+  if (state.publicChargers) {
+    const chargersList = document.getElementById('chargers-list');
+    let html = '';
+    for (const charger of state.publicChargers) {
+      const pwr = charger.currentPower_kW;
+      const pwrClass = pwr > 0 ? 'positive' : 'negative';
+      html += `<div class="charger-card">`;
+      html += `<div class="charger-id">${charger.name}</div>`;
+      html += `<div class="charger-stats">`;
+      html += `<span>Power: <span class="${pwrClass}">${pwr.toFixed(1)} kW</span></span>`;
+      html += `<span>Energy: <span style="color:#facc15;">${charger.cumulativeEnergy_kWh.toFixed(2)} kWh</span></span>`;
+      html += `</div></div>`;
+    }
+    if (chargersList.innerHTML !== html) {
+      chargersList.innerHTML = html;
+    }
+  }
+
+  // Houses list
+  if (state.houses) {
+    const list = document.getElementById('houses-list');
+    let html = '';
+    for (const house of state.houses) {
+      const netClass = house.netPower_kW >= 0 ? 'positive' : 'negative';
+      html += `<div class="house-card">`;
+      html += `<div class="house-id">House ${house.id} <span class="${netClass} net-power" style="float:right;">${house.netPower_kW.toFixed(2)} kW</span></div>`;
+      for (const asset of house.assets) {
+        html += `<div class="asset-row">`;
+        html += `<span>${asset.name.split('-').slice(1).join('-')}</span>`;
+        html += `<span class="asset-power">${asset.currentPower_kW.toFixed(2)} kW</span>`;
+        html += `<span class="asset-energy">${asset.cumulativeEnergy_kWh.toFixed(2)} kWh</span>`;
+        html += `</div>`;
+      }
+      html += `</div>`;
+    }
+    // Only update if changed (avoid scroll jank)
+    if (list.innerHTML !== html) {
+      list.innerHTML = html;
+    }
+  }
+}
+
+// Connect to SSE
+const evtSource = new EventSource('/events');
+evtSource.onmessage = (event) => {
+  try {
+    const state = JSON.parse(event.data);
+    updateUI(state);
+  } catch {}
+};
+
+evtSource.onerror = () => {
+  // Will auto-reconnect
+};
+
+// Get initial state while SSE connects
+fetch('/state')
+  .then(r => r.json())
+  .then(state => updateUI(state))
+  .catch(() => {});
+
+initChart();
+</script>
+</body>
+</html>

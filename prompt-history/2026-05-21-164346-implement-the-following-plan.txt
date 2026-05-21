@@ -1,0 +1,783 @@
+╭─── Claude Code v2.1.73 ──────────────────────────────────────────────────────╮
+│                                                  │ Tips for getting started  │
+│                   Welcome back!                  │ Run /init to create a CL… │
+│                                                  │ ───────────────────────── │
+│                     ▗ ▗   ▖ ▖                    │ Recent activity           │
+│                                                  │ No recent activity        │
+│                       ▘▘ ▝▝                      │                           │
+│                                                  │                           │
+│   deepseek/deepseek-v4-pro · API Usage Billing   │                           │
+│    ~/Projects/neighbourhood-energy-simulation    │                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ Plan to implement                                                            │
+│                                                                              │
+│ Implementation Plan: Neighbourhood Energy Simulation                         │
+│                                                                              │
+│ Context                                                                      │
+│                                                                              │
+│ Build a prototype Node.js application that simulates electricity             │
+│ use/generation in a neighbourhood with 30 houses and 6 public EV chargers.   │
+│ The simulation must be deterministic (seeded PRNG), configurable via YAML,   │
+│ and include an animated browser-based UI with real-time updates.             │
+│                                                                              │
+│ Tech Stack                                                                   │
+│                                                                              │
+│ - Runtime: Node.js (no frameworks — pure http module)                        │
+│ - 1 npm dependency: js-yaml (YAML config parsing — Node.js has no built-in   │
+│ YAML support; this is required by FR2.1)                                     │
+│ - Frontend: Single HTML file, vanilla JS, Chart.js loaded from CDN (no npm   │
+│ dependency)                                                                  │
+│ - Real-time updates: Server-Sent Events (SSE) — simpler than WebSockets,     │
+│ built into HTTP                                                              │
+│ - Testing: Node.js built-in node:test runner (no test framework dependency)  │
+│                                                                              │
+│ Project Structure                                                            │
+│                                                                              │
+│ neighbourhood-energy-simulation/                                             │
+│ ├── package.json                                                             │
+│ ├── config.yaml                  # Default neighbourhood configuration       │
+│ ├── README.md                                                                │
+│ ├── src/                                                                     │
+│ │   ├── index.js                 # Entry point: parses args, loads config,   │
+│ starts server + engine                                                       │
+│ │   ├── server.js                # HTTP server, serves index.html + SSE      │
+│ endpoint                                                                     │
+│ │   ├── simulation/                                                          │
+│ │   │   ├── clock.js             # SimulationClock: play/pause/speed control │
+│ │   │   ├── engine.js            # SimulationEngine: orchestrates tick loop  │
+│ │   │   └── rng.js               # Seeded PRNG (mulberry32 algorithm)        │
+│ │   ├── model/                                                               │
+│ │   │   ├── asset.js             # Abstract base class for all assets        │
+│ │   │   ├── base-consumption.js  # Always-on household base load             │
+│ │   │   ├── heat-pump.js         # Heat pump (consumes power)                │
+│ │   │   ├── pv.js                # Solar PV (generates power)                │
+│ │   │   ├── home-ev-charger.js   # Home EV charger (charging sessions)       │
+│ │   │   ├── public-ev-charger.js # Public EV charger (independent sessions)  │
+│ │   │   ├── house.js             # House: contains assets, enforces power    │
+│ limit                                                                        │
+│ │   │   └── neighbourhood.js     # Neighbourhood: aggregate power, 24h       │
+│ history                                                                      │
+│ │   ├── config/                                                              │
+│ │   │   └── loader.js            # YAML loader + validation                  │
+│ │   └── ui/                                                                  │
+│ │       └── index.html           # Single-page UI with controls + chart      │
+│ └── test/                                                                    │
+│     ├── clock.test.js                                                        │
+│     ├── energy-accounting.test.js                                            │
+│     └── reproducibility.test.js                                              │
+│                                                                              │
+│ Key Design Decisions                                                         │
+│                                                                              │
+│ 1. Seeded PRNG (mulberry32)                                                  │
+│                                                                              │
+│ 10-line implementation. All randomness flows through a single seeded         │
+│ generator. Same seed + same config = identical results. No library needed.   │
+│                                                                              │
+│ 2. Simulation Loop                                                           │
+│                                                                              │
+│ - Uses setInterval with dynamic interval based on speed multiplier           │
+│ - Formula: realIntervalMs = (stepSizeMinutes * 60000) / speedMultiplier      │
+│ - At 60x: 1 simulated minute = 1 real second → 1 simulated hour in 60 real   │
+│ seconds                                                                      │
+│ - Each tick: advance clock → step all assets → record history → push SSE     │
+│ event                                                                        │
+│                                                                              │
+│ 3. SSE for Real-time UI                                                      │
+│                                                                              │
+│ - Server pushes SimulationState JSON to browser on every tick                │
+│ - Browser updates DOM and chart without polling                              │
+│ - Simpler than WebSocket; no bidirectional communication needed              │
+│                                                                              │
+│ 4. Asset Behaviour Models (simplified, random-based)                         │
+│                                                                              │
+│ - Base consumption: Random walk around baseLoad ± variance                   │
+│ - Heat pump: Random consumption within power limit (weather-aware later)     │
+│ - PV: Random generation within peak power, scaled by a simple time-of-day    │
+│ factor (daylight hours produce more)                                         │
+│ - Home EV charger: Random session start/stop; when active, draws constant    │
+│ charge power                                                                 │
+│ - Public EV charger: Independent random sessions, same power model           │
+│                                                                              │
+│ 5. Energy Accounting                                                         │
+│                                                                              │
+│ - cumulativeEnergy_kWh += currentPower_kW * deltaTimeHours on every step     │
+│ - PV generation is negative power; offsets house load first                  │
+│ - Neighbourhood aggregate = sum of all house net power + public charger      │
+│ power                                                                        │
+│                                                                              │
+│ 6. UI Layout                                                                 │
+│                                                                              │
+│ - Top bar: current date/time, season, speed controls (play/pause,            │
+│ 1x/10x/60x/3600x)                                                            │
+│ - Main area: neighbourhood net power gauge + 24h line chart                  │
+│ - Bottom: scrollable list of houses with per-asset cumulative energy         │
+│                                                                              │
+│ Implementation Steps                                                         │
+│                                                                              │
+│ Step 1: Boilerplate Node project                                             │
+│                                                                              │
+│ - package.json with js-yaml dependency                                       │
+│ - config.yaml with defaults                                                  │
+│ - Updated README.md                                                          │
+│ - .gitignore                                                                 │
+│                                                                              │
+│ Step 2: Core domain models                                                   │
+│                                                                              │
+│ - src/model/asset.js — abstract base                                         │
+│ - src/model/base-consumption.js                                              │
+│ - src/model/heat-pump.js                                                     │
+│ - src/model/pv.js                                                            │
+│ - src/model/home-ev-charger.js                                               │
+│ - src/model/public-ev-charger.js                                             │
+│ - src/model/house.js                                                         │
+│ - src/model/neighbourhood.js                                                 │
+│ - src/simulation/rng.js                                                      │
+│                                                                              │
+│ Step 3: Simulation engine                                                    │
+│                                                                              │
+│ - src/simulation/clock.js                                                    │
+│ - src/simulation/engine.js                                                   │
+│ - src/config/loader.js                                                       │
+│                                                                              │
+│ Step 4: HTTP server + SSE                                                    │
+│                                                                              │
+│ - src/server.js                                                              │
+│ - src/ui/index.html                                                          │
+│                                                                              │
+│ Step 5: Entry point                                                          │
+│                                                                              │
+│ - src/index.js — wires everything together                                   │
+│                                                                              │
+│ Step 6: Tests                                                                │
+│                                                                              │
+│ - test/clock.test.js                                                         │
+│ - test/energy-accounting.test.js                                             │
+│ - test/reproducibility.test.js                                               │
+│                                                                              │
+│ Step 7: Finalize README                                                      │
+│                                                                              │
+│ Verification                                                                 │
+│                                                                              │
+│ 1. npm install — should only install js-yaml                                 │
+│ 2. npm start — starts simulation + opens browser                             │
+│ 3. UI shows clock advancing, chart updating, per-asset energy accumulating   │
+│ 4. npm test — all tests pass                                                 │
+│ 5. Restart with same seed → identical cumulative energy values               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+⏺ I'll implement this plan step by step. Let me start by checking the current
+  state of the project and then build everything
+
+⏺ Let me check what already exists in the project.
+
+⏺ Read 2 files (ctrl+o to expand)
+
+⏺ Good, the project is mostly empty. Let me start implementing. I'll begin with
+  Step 1.
+
+⏺ Bash(mkdir -p /Users/ronald/Projects/neighbourhood-energy-simulation/src/{simu
+      lation,model,config,ui}
+      /Users/ronald/Projects/neighbourhood-energy-simulation/test)
+  ⎿  Done
+
+⏺ Write(package.json)
+  ⎿  Wrote 13 lines to package.json
+       1 {
+       2   "name": "neighbourhood-energy-simulation",
+       3   "version": "1.0.0",
+       4   "description": "Prototype simulation of electricity use and ge
+         neration in a neighbourhood",
+       5   "main": "src/index.js",
+       6   "scripts": {
+       7     "start": "node src/index.js",
+       8     "test": "node --test"
+       9   },
+      10   "dependencies": {
+     … +3 lines (ctrl+o to expand)
+
+⏺ Write(config.yaml)
+  ⎿  Wrote 27 lines to config.yaml
+       1 simulation:
+       2   stepSizeMinutes: 1
+       3   seed: 12345
+       4   speedMultiplier: 60
+       5   startTime: "2024-01-01T00:00:00"
+       6 
+       7 houses:
+       8   count: 30
+       9   powerLimit_kW: 10
+      10   assets:
+     … +17 lines (ctrl+o to expand)
+
+⏺ Now let me create the Step 1 files in parallel.
+
+⏺ Write(.gitignore)
+  ⎿  Wrote 1 lines to .gitignore
+      1 node_modules/
+
+⏺ Bash(npm install)
+  ⎿  added 2 packages, and audited 3 packages in 567ms
+
+     found 0 vulnerabilities
+     … +5 lines (ctrl+o to expand)
+
+⏺ Step 1 complete. Now Step 2 — core domain models.
+
+⏺ Write(src/simulation/rng.js)
+  ⎿  Wrote 13 lines to src/simulation/rng.js
+       1 /**
+       2  * Mulberry32 seeded PRNG — deterministic random number generato
+         r.
+       3  * Same seed always produces the same sequence of random numbers
+         .
+       4  */
+       5 export function createRNG(seed) {
+       6   let state = seed | 0;
+       7   return function next() {
+       8     state = (state + 0x6d2b79f5) | 0;
+       9     let t = Math.imul(state ^ (state >>> 15), 1 | state);
+      10     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+     … +3 lines (ctrl+o to expand)
+
+⏺ Write(src/model/asset.js)
+  ⎿  Wrote 26 lines to src/model/asset.js
+       1 /**
+       2  * Abstract base class for all energy assets.
+       3  * Each asset tracks its current power and cumulative energy.
+       4  */
+       5 export class Asset {
+       6   constructor(name) {
+       7     this.name = name;
+       8     this.currentPower_kW = 0;
+       9     this.cumulativeEnergy_kWh = 0;
+      10   }
+     … +16 lines (ctrl+o to expand)
+
+⏺ Write(src/model/base-consumption.js)
+  ⎿  Wrote 24 lines to src/model/base-consumption.js
+       1 import { Asset } from './asset.js';
+       2 
+       3 /**
+       4  * Always-on household base load (lights, appliances, etc.).
+       5  * Performs a bounded random walk around a base load value.
+       6  */
+       7 export class BaseConsumption extends Asset {
+       8   constructor(name, baseLoad_kW, variance_kW) {
+       9     super(name);
+      10     this.baseLoad_kW = baseLoad_kW;
+     … +14 lines (ctrl+o to expand)
+
+⏺ Write(src/model/heat-pump.js)
+  ⎿  Wrote 30 lines to src/model/heat-pump.js
+       1 import { Asset } from './asset.js';
+       2 
+       3 /**
+       4  * Heat pump — consumes power for heating/cooling.
+       5  * Activity level varies by season (more in winter, less in summ
+         er).
+       6  */
+       7 export class HeatPump extends Asset {
+       8   constructor(name, maxPower_kW) {
+       9     super(name);
+      10     this.maxPower_kW = maxPower_kW;
+     … +20 lines (ctrl+o to expand)
+
+⏺ Write(src/model/pv.js)
+  ⎿  Wrote 38 lines to src/model/pv.js
+       1 import { Asset } from './asset.js';
+       2 
+       3 /**
+       4  * Solar PV — generates power (negative consumption).
+       5  * Output varies by time of day (daylight hours produce more) an
+         d season.
+       6  */
+       7 export class PV extends Asset {
+       8   constructor(name, peakPower_kW) {
+       9     super(name);
+      10     this.peakPower_kW = peakPower_kW;
+     … +28 lines (ctrl+o to expand)
+
+⏺ Write(src/model/home-ev-charger.js)
+  ⎿  Wrote 37 lines to src/model/home-ev-charger.js
+       1 import { Asset } from './asset.js';
+       2 
+       3 /**
+       4  * Home EV charger — starts random charging sessions.
+       5  * When active, draws constant charge power.
+       6  */
+       7 export class HomeEvCharger extends Asset {
+       8   constructor(name, chargePower_kW, sessionsPerDay, avgSessionDu
+         rationHours) {
+       9     super(name);
+      10     this.chargePower_kW = chargePower_kW;
+     … +27 lines (ctrl+o to expand)
+
+⏺ Write(src/model/public-ev-charger.js)
+  ⎿  Wrote 34 lines to src/model/public-ev-charger.js
+       1 import { Asset } from './asset.js';
+       2 
+       3 /**
+       4  * Public EV charger — independent random charging sessions.
+       5  * Higher power and more frequent sessions than home chargers.
+       6  */
+       7 export class PublicEvCharger extends Asset {
+       8   constructor(name, chargePower_kW, sessionsPerDay, avgSessionDu
+         rationHours) {
+       9     super(name);
+      10     this.chargePower_kW = chargePower_kW;
+     … +24 lines (ctrl+o to expand)
+
+⏺ Write(src/model/house.js)
+  ⎿  Wrote 44 lines to src/model/house.js
+       1 import { BaseConsumption } from './base-consumption.js';
+       2 import { HeatPump } from './heat-pump.js';
+       3 import { PV } from './pv.js';
+       4 import { HomeEvCharger } from './home-ev-charger.js';
+       5 
+       6 /**
+       7  * A house contains multiple energy assets.
+       8  * Net power = sum of all asset powers (PV generates negative = 
+         offsets load).
+       9  * Power limit caps net consumption (import from grid).
+      10  */
+     … +34 lines (ctrl+o to expand)
+
+⏺ Creating all core domain model files and RNG in parallel.
+
+⏺ Write(src/model/neighbourhood.js)
+  ⎿  Wrote 62 lines to src/model/neighbourhood.js
+       1 import { House } from './house.js';
+       2 import { PublicEvCharger } from './public-ev-charger.js';
+       3 
+       4 /**
+       5  * The neighbourhood: all houses + public EV chargers.
+       6  * Tracks aggregate power and a rolling 24-hour history.
+       7  */
+       8 export class Neighbourhood {
+       9   constructor(config) {
+      10     this.houses = [];
+     … +52 lines (ctrl+o to expand)
+
+⏺ Step 2 complete. Now Step 3 — simulation engine (clock, engine, config
+  loader).
+
+⏺ Write(src/simulation/clock.js)
+  ⎿  Wrote 60 lines to src/simulation/clock.js
+       1 /**
+       2  * SimulationClock — manages the simulation timeline.
+       3  * Supports play, pause, and variable speed control.
+       4  */
+       5 export class SimulationClock {
+       6   constructor(startTime = new Date('2024-01-01T00:00:00')) {
+       7     this.currentTime = new Date(startTime);
+       8     this.isRunning = false;
+       9     this.speedMultiplier = 60; // 1 real second = 60 simulated m
+         inutes
+      10   }
+     … +50 lines (ctrl+o to expand)
+
+⏺ Write(src/config/loader.js)
+  ⎿  Wrote 58 lines to src/config/loader.js
+       1 import { readFileSync } from 'node:fs';
+       2 import { load as loadYaml } from 'js-yaml';
+       3 
+       4 /**
+       5  * Load and validate the YAML configuration file.
+       6  * Returns a structured config object with defaults applied.
+       7  */
+       8 export function loadConfig(filePath) {
+       9   const raw = readFileSync(filePath, 'utf8');
+      10   const parsed = loadYaml(raw);
+     … +48 lines (ctrl+o to expand)
+
+⏺ Write(src/simulation/engine.js)
+  ⎿  Wrote 130 lines to src/simulation/engine.js
+       1 import { SimulationClock } from './clock.js';
+       2 import { createRNG } from './rng.js';
+       3 import { Neighbourhood } from '../model/neighbourhood.js';
+       4 
+       5 /**
+       6  * SimulationEngine — orchestrates the tick loop.
+       7  * Each tick: advance clock → step all assets → record history →
+          emit state via callback.
+       8  */
+       9 export class SimulationEngine {
+      10   constructor(config, onTick) {
+     … +120 lines (ctrl+o to expand)
+
+⏺ Step 3 complete. Now Step 4 — HTTP server, SSE, and UI.
+
+⏺ Write(src/server.js)
+  ⎿  Wrote 100 lines to src/server.js
+       1 import { createServer } from 'node:http';
+       2 import { readFileSync } from 'node:fs';
+       3 import { join, dirname } from 'node:path';
+       4 import { fileURLToPath } from 'node:url';
+       5 
+       6 const __dirname = dirname(fileURLToPath(import.meta.url));
+       7 
+       8 /**
+       9  * Create an HTTP server that serves the UI and SSE endpoint.
+      10  * @param {import('../simulation/engine.js').SimulationEngine} e
+         ngine
+     … +90 lines (ctrl+o to expand)
+
+⏺ Write(src/ui/index.html)
+  ⎿  Wrote 208 lines to src/ui/index.html
+       1 <!DOCTYPE html>
+       2 <html lang="en">
+       3 <head>
+       4 <meta charset="UTF-8">
+       5 <meta name="viewport" content="width=device-width, initial-scale
+         =1.0">
+       6 <title>Neighbourhood Energy Simulation</title>
+       7 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/ch
+         art.umd.min.js"></script>
+       8 <style>
+       9   *, *::before, *::after { box-sizing: border-box; margin: 0; pa
+         dding: 0; }
+      10   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe 
+         UI', system-ui, sans-serif; background: #0f172a; color: #e2e8f0;
+          height: 100vh; display: flex; flex-direction: column; overflow:
+          hidden; }
+     … +198 lines (ctrl+o to expand)
+
+⏺ Step 4 complete. Now Step 5 — entry point.
+
+⏺ Write(src/index.js)
+  ⎿  Wrote 50 lines to src/index.js
+      1 import { resolve } from 'node:path';
+      2 import { loadConfig } from './config/loader.js';
+      3 import { SimulationEngine } from './simulation/engine.js';
+      4 import { createHTTPServer } from './server.js';
+      5 
+      6 // Parse command-line arguments
+      7 const args = process.argv.slice(2);
+      8 let configPath = resolve('config.yaml');
+      9 let port = 3000;
+     … +40 lines (ctrl+o to expand)
+
+⏺ Let me test that the server starts correctly.
+
+⏺ Bash(node src/index.js &
+      sleep 2…)
+  ⎿  (node:10883) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of fi
+     le:///Users/ronald/Projects/neighbourhood-energy-simulation/src/index.
+     js is not specified and it doesn't parse as CommonJS.
+     … +19 lines (ctrl+o to expand)
+
+⏺ Server works. Let me fix the module type warning and complete Steps 5-7
+
+⏺ Read 1 file (ctrl+o to expand)
+
+⏺ Update(package.json)
+  ⎿  Added 1 line
+      2    "name": "neighbourhood-energy-simulation",
+      3    "version": "1.0.0",
+      4    "description": "Prototype simulation of electricity use and ge
+         neration in a neighbourhood",
+      5 +  "type": "module",                                             
+      6    "main": "src/index.js",
+      7    "scripts": {
+      8      "start": "node src/index.js",
+
+⏺ Write(test/clock.test.js)
+  ⎿  Wrote 80 lines to test/clock.test.js
+      1 import { describe, it } from 'node:test';
+      2 import assert from 'node:assert/strict';
+      3 import { SimulationClock } from '../src/simulation/clock.js';
+      4 
+      5 describe('SimulationClock', () => {
+      6   it('starts at the given time', () => {
+      7     const clock = new SimulationClock(new Date('2024-06-15T12:00:
+        00'));
+      8     assert.equal(clock.currentTime.toISOString(), new Date('2024-
+        06-15T12:00:00').toISOString());
+      9   });
+     … +70 lines (ctrl+o to expand)
+
+⏺ Write(test/energy-accounting.test.js)
+  ⎿  Wrote 93 lines to test/energy-accounting.test.js
+       1 import { describe, it } from 'node:test';
+       2 import assert from 'node:assert/strict';
+       3 import { Asset } from '../src/model/asset.js';
+       4 import { BaseConsumption } from '../src/model/base-consumption.j
+         s';
+       5 import { PV } from '../src/model/pv.js';
+       6 import { HeatPump } from '../src/model/heat-pump.js';
+       7 import { createRNG } from '../src/simulation/rng.js';
+       8 
+       9 describe('Energy Accounting', () => {
+      10   it('Asset.updateEnergy accumulates energy correctly', () => {
+     … +83 lines (ctrl+o to expand)
+
+⏺ Now let me write the three test files in parallel
+
+⏺ Write(test/reproducibility.test.js)
+  ⎿  Wrote 121 lines to test/reproducibility.test.js
+       1 import { describe, it } from 'node:test';
+       2 import assert from 'node:assert/strict';
+       3 import { createRNG } from '../src/simulation/rng.js';
+       4 import { Neighbourhood } from '../src/model/neighbourhood.js';
+       5 import { loadConfig } from '../src/config/loader.js';
+       6 import { resolve } from 'node:path';
+       7 
+       8 describe('Reproducibility', () => {
+       9   it('mulberry32 produces identical sequences from same seed', (
+         ) => {
+      10     const rng1 = createRNG(12345);
+     … +111 lines (ctrl+o to expand)
+
+⏺ Now let me run the tests
+
+⏺ Bash(npm test)
+  ⎿  Error: Exit code 1
+
+     > neighbourhood-energy-simulation@1.0.0 test
+     > node --test
+
+     ▶ SimulationClock
+       ✔ starts at the given time (1.193958ms)
+       ✔ advances by the given number of minutes (0.368875ms)
+       ✔ advances hours when minutes overflow (0.049ms)
+       ✔ advances days when hours overflow (0.038209ms)
+     … +55 lines (ctrl+o to see all)
+
+⏺ One test fails on -0 === 0 strict comparison. Let me fix the PV model to avoid
+   negative zero
+
+⏺ Read 1 file (ctrl+o to expand)
+
+⏺ Update(src/model/pv.js)
+  ⎿  Added 1 line, removed 1 line
+      32      // Cloud cover randomness (clear = 1, overcast ≈ 0.2)
+      33      const cloudFactor = 0.2 + rng() * 0.8;
+      34  
+      35 -    const power = -(this.peakPower_kW * daylightFactor * season
+         -alSun * cloudFactor);                                          
+      35 +    const power = -(this.peakPower_kW * daylightFactor * season
+         +alSun * cloudFactor) || 0;                                     
+      36      this.currentPower_kW = Math.round(power * 100) / 100;
+      37    }
+      38  }
+      39   No newline at end of file
+
+⏺ Bash(npm test)
+  ⎿  > neighbourhood-energy-simulation@1.0.0 test
+     > node --test
+     … +19 lines (ctrl+o to expand)
+
+⏺ All 21 tests pass. Let me finalize the README.
+
+⏺ Write(README.md)
+  ⎿  Added 128 lines, removed 1 line
+        1 -# neighbourhood-energy-simulation                             
+        1   No newline at end of file
+        2 +# neighbourhood-energy-simulation                             
+        3 +                                                              
+        4 +Prototype Node.js simulation of electricity use and generation
+          + in a neighbourhood with 30 houses and 6 public EV chargers.  
+        5 +                                                              
+        6 +## Quick Start                                                
+        7 +                                                              
+        8 +```bash                                                       
+        9 +npm install                                                   
+       10 +npm start                                                     
+       11 +```                                                           
+       12 +                                                              
+       13 +Opens the simulation at [http://localhost:3000](http://localho
+          +st:3000) with a live animated dashboard.                      
+       14 +                                                              
+       15 +## Features                                                   
+       16 +                                                              
+       17 +- **Deterministic**: Seeded PRNG (mulberry32) ensures identica
+          +l results with the same seed and config                       
+       18 +- **Configurable**: All simulation parameters in `config.yaml`
+       19 +- **Real-time UI**: Browser dashboard with Chart.js line chart
+          +, live gauge, and per-asset breakdown                         
+       20 +- **SSE-based**: Server-Sent Events push updates to the browse
+          +r — no polling, no WebSocket dependencies                     
+       21 +- **Zero framework**: Pure Node.js `http` module; one npm depe
+          +ndency (`js-yaml` for config parsing)                         
+       22 +                                                              
+       23 +## Configuration                                              
+       24 +                                                              
+       25 +Edit `config.yaml` to customise the simulation:               
+       26 +                                                              
+       27 +```yaml                                                       
+       28 +simulation:                                                   
+       29 +  stepSizeMinutes: 1      # Granularity of each simulation tic
+          +k                                                             
+       30 +  seed: 12345             # PRNG seed (same seed = same result
+          +s)                                                            
+       31 +  speedMultiplier: 60     # 60 = 1 simulated minute per real s
+          +econd                                                         
+       32 +                                                              
+       33 +houses:                                                       
+       34 +  count: 30                                                   
+       35 +  powerLimit_kW: 10                                           
+       36 +  assets:                                                     
+       37 +    baseConsumption: { baseLoad_kW: 0.5, variance_kW: 0.2 }   
+       38 +    heatPump: { maxPower_kW: 3 }                              
+       39 +    pv: { peakPower_kW: 5 }                                   
+       40 +    homeEvCharger: { chargePower_kW: 7, sessionsPerDay: 2, avg
+          +SessionDurationHours: 2 }                                     
+       41 +                                                              
+       42 +publicChargers:                                               
+       43 +  count: 6                                                    
+       44 +  chargePower_kW: 22                                          
+       45 +  sessionsPerDay: 10                                          
+       46 +  avgSessionDurationHours: 1                                  
+       47 +```                                                           
+       48 +                                                              
+       49 +### CLI Options                                               
+       50 +                                                              
+       51 +```bash                                                       
+       52 +node src/index.js --config my-config.yaml --port 8080         
+       53 +```                                                           
+       54 +                                                              
+       55 +## UI Controls                                                
+       56 +                                                              
+       57 +- **Play/Pause** — start and stop the simulation clock        
+       58 +- **Speed buttons** — 1x, 60x, 3600x (3600x = ~1 simulated hou
+          +r per real second)                                            
+       59 +                                                              
+       60 +The dashboard shows:                                          
+       61 +                                                              
+       62 +- Current simulation date/time and season                     
+       63 +- Neighbourhood net power gauge (green = generation, red = con
+          +sumption)                                                     
+       64 +- 24-hour net power line chart                                
+       65 +- Scrollable per-house asset list with per-asset power and cum
+          +ulative energy                                                
+       66 +                                                              
+       67 +## Asset Models                                               
+       68 +                                                              
+       69 +Each house contains four assets:                              
+       70 +                                                              
+       71 +| Asset | Behaviour |                                         
+       72 +|---|---|                                                     
+       73 +| Base Consumption | Random walk around `baseLoad_kW` ± `varia
+          +nce_kW` |                                                     
+       74 +| Heat Pump | Random consumption scaled by season (higher in w
+          +inter) |                                                      
+       75 +| Solar PV | Generation based on time-of-day sine curve + seas
+          +onal factor + random cloud cover |                            
+       76 +| Home EV Charger | Random session start/stop at constant char
+          +ge power |                                                    
+       77 +                                                              
+       78 +Public EV chargers operate independently with higher power and
+          + more frequent sessions.                                      
+       79 +                                                              
+       80 +## Testing                                                    
+       81 +                                                              
+       82 +```bash                                                       
+       83 +npm test                                                      
+       84 +```                                                           
+       85 +                                                              
+       86 +Uses Node.js built-in `node:test` runner. Three test suites:  
+       87 +                                                              
+       88 +- **Clock** — time advancement, play/pause, seasons, speed con
+          +trol                                                          
+       89 +- **Energy Accounting** — cumulative energy accumulation, asse
+          +t bounds, seasonal behaviour                                  
+       90 +- **Reproducibility** — same seed produces identical results, 
+          +different seeds diverge                                       
+       91 +                                                              
+       92 +## Project Structure                                          
+       93 +                                                              
+       94 +```                                                           
+       95 +neighbourhood-energy-simulation/                              
+       96 +├── package.json                                              
+       97 +├── config.yaml                                               
+       98 +├── README.md                                                 
+       99 +├── src/                                                      
+      100 +│   ├── index.js                                              
+      101 +│   ├── server.js                                             
+      102 +│   ├── simulation/                                           
+      103 +│   │   ├── clock.js                                          
+      104 +│   │   ├── engine.js                                         
+      105 +│   │   └── rng.js                                            
+      106 +│   ├── model/                                                
+      107 +│   │   ├── asset.js                                          
+      108 +│   │   ├── base-consumption.js                               
+      109 +│   │   ├── heat-pump.js                                      
+      110 +│   │   ├── pv.js                                             
+      111 +│   │   ├── home-ev-charger.js                                
+      112 +│   │   ├── public-ev-charger.js                              
+      113 +│   │   ├── house.js                                          
+      114 +│   │   └── neighbourhood.js                                  
+      115 +│   ├── config/                                               
+      116 +│   │   └── loader.js                                         
+      117 +│   └── ui/                                                   
+      118 +│       └── index.html                                        
+      119 +└── test/                                                     
+      120 +    ├── clock.test.js                                         
+      121 +    ├── energy-accounting.test.js                             
+      122 +    └── reproducibility.test.js                               
+      123 +```                                                           
+      124 +                                                              
+      125 +## Dependencies                                               
+      126 +                                                              
+      127 +- **Runtime**: [js-yaml](https://www.npmjs.com/package/js-yaml
+          +) (YAML config parsing)                                       
+      128 +- **Browser**: [Chart.js 4.4](https://www.chartjs.org/) (loade
+          +d via CDN)                                                    
+      129 +- **No other npm or runtime dependencies**                    
+      130   No newline at end of file
+
+⏺ Let me run a final end-to-end verification.
+
+⏺ Bash(node src/index.js &
+      SERVER_PID=$!…)
+  ⎿  Loading config from: /Users/ronald/Projects/neighbourhood-energy-simul
+     ation/config.yaml
+     Seed: 12345
+     … +22 lines (ctrl+o to expand)
+
+⏺ Bash(kill $(lsof -ti:3000) 2>/dev/null; echo "Port 3000 freed")
+  ⎿  Port 3000 freed
+
+⏺ All 7 implementation steps are complete. Here's what was built:
+
+  Project structure
+
+  neighbourhood-energy-simulation/
+  ├── package.json          # 1 dependency: js-yaml
+  ├── config.yaml           # Default neighbourhood config
+  ├── README.md             # Full documentation
+  ├── src/
+  │   ├── index.js          # Entry point: parses args, loads config, starts
+  server
+  │   ├── server.js         # HTTP server: serves HTML + SSE + control API
+  │   ├── simulation/
+  │   │   ├── clock.js      # SimulationClock: play/pause/speed
+  │   │   ├── engine.js     # Orchestrates tick loop, emits state
+  │   │   └── rng.js        # Mulberry32 seeded PRNG
+  │   ├── model/
+  │   │   ├── asset.js      # Abstract base class
+  │   │   ├── base-consumption.js, heat-pump.js, pv.js
+  │   │   ├── home-ev-charger.js, public-ev-charger.js
+  │   │   ├── house.js      # Contains 4 assets, computes net power
+  │   │   └── neighbourhood.js  # 30 houses + 6 chargers, 24h history
+  │   ├── config/loader.js  # YAML loader + validation
+  │   └── ui/index.html     # Single-page dashboard
+  └── test/                 # 3 suites, 21 tests — all passing
+
+  Key numbers
+
+  - 21 tests passing, 0 failures
+  - 1 npm dependency (js-yaml)
+  - 30 houses x 4 assets each, 6 public EV chargers
+  - Real-time updates via SSE (no WebSocket dependency)
+  - Deterministic: same seed + same config = identical cumulative energy
+
+  To run
+
+  npm install   # already done
+  npm start     # http://localhost:3000
+  npm test      # 21 tests
+
+✻ Worked for 14m 50s
