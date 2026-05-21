@@ -1,0 +1,27 @@
+simulation:
+  stepSizeMinutes: 1
+  seed: 12345
+  speedMultiplier: 60
+  startTime: "2024-01-01T00:00:00"
+
+houses:
+  count: 30
+  powerLimit_kW: 10
+  assets:
+    baseConsumption:
+      baseLoad_kW: 0.5
+      variance_kW: 0.2
+    heatPump:
+      maxPower_kW: 3
+    pv:
+      peakPower_kW: 5
+    homeEvCharger:
+      chargePower_kW: 7
+      sessionsPerDay: 2
+      avgSessionDurationHours: 2
+
+publicChargers:
+  count: 6
+  chargePower_kW: 22
+  sessionsPerDay: 10
+  avgSessionDurationHours: 1

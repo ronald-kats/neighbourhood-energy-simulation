@@ -1,0 +1,14 @@
+{
+  "name": "neighbourhood-energy-simulation",
+  "version": "1.0.0",
+  "description": "Prototype simulation of electricity use and generation in a neighbourhood",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  }
+}
