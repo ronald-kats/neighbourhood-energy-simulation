@@ -143,6 +143,7 @@ neighbourhood-energy-simulation/
 - Only one configuration from yaml file, not very user friendly
 - Speed control should be more advanced so you can simulate a day in small steps but also seasons in bigger steps
 - The current setup with a list of assets and houses isn’t really scalable
+- Peak shaving not very visible
 
 
 
