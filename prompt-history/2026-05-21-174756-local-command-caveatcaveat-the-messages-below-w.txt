@@ -1,0 +1,378 @@
+╭─── Claude Code v2.1.73 ──────────────────────────────────────────────────────╮
+│                                                  │ Tips for getting started  │
+│                   Welcome back!                  │ Run /init to create a CL… │
+│                                                  │ ───────────────────────── │
+│                     ▗ ▗   ▖ ▖                    │ Recent activity           │
+│                                                  │ No recent activity        │
+│                       ▘▘ ▝▝                      │                           │
+│                                                  │                           │
+│   deepseek/deepseek-v4-pro · API Usage Billing   │                           │
+│    ~/Projects/neighbourhood-energy-simulation    │                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+❯ /clear                                                                        
+  ⎿  (no content)
+
+❯ You are a senior tech lead and architect. Review this project and validate:   
+Software architecture and data mode:                                            
+Solid principles                                                                
+Loosely coupled                                                                 
+Clean structure                                                                 
+Readability of code: easy to read and understand                                
+Maintainability of code: easy to debug and extend                               
+Check for race conditions in code                                               
+Document key components and responsibilities                                    
+Are tests covering unhappy flows                                                
+                                                                                
+
+⏺ Explore(Explore project structure)
+  ⎿  Done (32 tool uses · 56.0k tokens · 2m 52s)
+  (ctrl+o to expand)
+
+⏺ Read 13 files (ctrl+o to expand)
+
+⏺ Now let me read all the source files in detail for the code review.
+
+⏺ Read 11 files (ctrl+o to expand)
+
+⏺ I've now read every file in the project. Here is the full architecture review.
+
+  ---
+  Architecture & Code Quality Review
+
+  1. SOLID Principles
+
+  Single Responsibility — PASS
+
+  Each class has one clear job. SimulationClock owns time,
+  DeterministicWeatherModel owns weather computation, each asset subtype models
+  exactly one device, SimulationEngine orchestrates the tick loop, server.js
+  handles HTTP/SSE I/O. No god objects.
+
+  Open/Closed — PASS
+
+  The Asset base class (src/model/asset.js:5) defines a single step() contract.
+  Adding a new asset type (e.g. battery storage) requires only a new file
+  extending Asset and registering it in House — no changes to the engine,
+  neighbourhood, or other assets.
+
+  Liskov Substitution — PASS
+
+  All 5 asset subtypes honour the step(deltaTimeHours, weather, rng) signature.
+  The House.step() loop (src/model/house.js:50-52) iterates polymorphically —
+  any Asset subclass works.
+
+  Interface Segregation — PASS
+
+  The Asset base exposes only step() and updateEnergy(). No client is forced to
+  depend on unused methods. The weather and rng parameters use function/object
+  signatures rather than forcing assets to depend on concrete implementations.
+
+  Dependency Inversion — PASS with one note
+
+  The SimulationEngine depends on the Asset abstraction via the
+  Neighbourhood/House composition. However, House directly instantiates concrete
+   asset classes (src/model/house.js:23-44) — it's a hardcoded factory. For a
+  prototype this is fine; for production, a factory function or DI container
+  would decouple further.
+
+  ---
+  2. Coupling
+
+  The architecture is well-layered and loosely coupled:
+
+  ┌──────────────────┬──────────────────────────┬───────────────────────────┐
+  │      Layer       │        Depends on        │         Coupling          │
+  ├──────────────────┼──────────────────────────┼───────────────────────────┤
+  │ server.js        │ engine.onTick callback   │ Loose — callback pattern  │
+  ├──────────────────┼──────────────────────────┼───────────────────────────┤
+  │                  │ Clock, RNG,              │ Moderate — direct imports │
+  │ engine.js        │ Neighbourhood,           │  but clean interfaces     │
+  │                  │ WeatherModel             │                           │
+  ├──────────────────┼──────────────────────────┼───────────────────────────┤
+  │                  │ Asset base,              │ Loose — value objects, no │
+  │ model/*.js       │ WeatherCondition value   │  side effects             │
+  │                  │ object                   │                           │
+  ├──────────────────┼──────────────────────────┼───────────────────────────┤
+  │                  │                          │ Loose — pure function, no │
+  │ config/loader.js │ js-yaml, node:fs         │  side effects beyond file │
+  │                  │                          │  read                     │
+  └──────────────────┴──────────────────────────┴───────────────────────────┘
+
+  The onTick callback pattern in server.js:86-97 is clean — the server doesn't
+  import simulation internals, it only receives serialised state objects. The
+  WeatherCondition value object is passed by reference but treated as immutable.
+
+  One concern: server.js:86-97 overwrites engine.onTick monolithically. If
+  createHTTPServer were called twice, the first callback is silently lost. This
+  could be made additive.
+
+  ---
+  3. Clean Structure
+
+  Directory layout follows domain boundaries:
+
+  src/
+    index.js           — composition root (wires config → engine → server)
+    config/loader.js   — configuration parsing (single responsibility)
+    simulation/        — time, randomness, orchestration
+    model/             — domain entities (assets, house, neighbourhood, weather)
+    ui/                — presentation (served as static HTML)
+  test/                — mirrors src structure
+
+  No circular dependencies. The import graph is acyclic: model → simulation (for
+   RNG only), simulation → model, server → simulation, index → config + 
+  simulation + server.
+
+  ---
+  4. Readability
+
+  Strengths:
+  - Consistent JSDoc on all classes and public methods
+  - Descriptive naming: cumulativeEnergy_kWh, _sessionRemainingHours,
+  heatingDemand
+  - Short files (longest is weather-model.js at 149 lines)
+  - Explicit parameter documentation with types in JSDoc
+
+  Minor issues:
+  - src/model/pv.js:21 — Math.round(power * 100) / 100 || 0 — the || 0 guards
+  against negative zero but the intent is not obvious without
+  JavaScript-specific knowledge
+  - src/simulation/engine.js:89 — _currentWeather is accessed via _buildState()
+  which is called from server.js before the first tick fires. The null guard on
+  line 110 handles this, but the implicit coupling between engine startup and
+  state serialisation is subtle
+  - src/config/loader.js — The nested optional chaining
+  (parsed.houses.assets?.homeEvCharger?.sessionsPerDay) reaches 4 levels deep; a
+   schema library would make defaults more readable at scale
+
+  ---
+  5. Maintainability
+
+  Strengths:
+  - Configuration-driven: all device parameters live in config.yaml, no magic
+  numbers in code
+  - Seeded PRNG (mulberry32) guarantees reproducibility for debugging
+  - Single npm dependency (js-yaml)
+  - ESM modules throughout — no bundler needed
+  - node:test runner — no Jest/Mocha dependency
+  - Adding a new asset type requires touching only 2 files: a new model file +
+  house.js
+
+  Areas to watch:
+  - src/model/neighbourhood.js:57-59 — this.history.slice(-maxEntries) allocates
+   a new array on every trim. At 1-min steps, this copies ~1440 elements every
+  60 simulated hours. A circular buffer would be more efficient for long-running
+   simulations
+  - src/model/season.js defines an enum (Season.WINTER) while
+  src/simulation/clock.js:37-43 returns plain strings ("Winter"). Two season
+  representations coexist — if they diverge, the UI will show one value while
+  the weather model uses another. SimulationEngine._buildState() at line 106
+  uses this.clock.season (the string), not the weather model's Season enum
+
+  ---
+  6. Race Conditions
+
+  No race conditions found. The system is single-threaded by design:
+
+  - The tick loop uses setTimeout (not setInterval), scheduling the next tick
+  only after the current one completes (src/simulation/engine.js:76-79)
+  - pause() both sets clock.isRunning = false and calls clearTimeout atomically
+  within the same synchronous execution
+  - _scheduleTick() guards on this.clock.isRunning at entry
+  (src/simulation/engine.js:71), so even if a timeout fires after pause (which
+  clearTimeout prevents), it's a no-op
+  - All state mutations within _tick() happen synchronously on the event loop —
+  no await, no callbacks that yield control mid-tick
+  - The sseClients Set in server.js:14 is only mutated during synchronous
+  request handling (req.on('close') is async but Node.js delivers it on the
+  event loop, not concurrently)
+
+  Potential issue under load: If /control POSTs arrive faster than the tick
+  interval, setSpeed() → clearTimeout → _scheduleTick() can create overlapping
+  timeouts. However, _scheduleTick checks isRunning first, and _tick calls
+  _scheduleTick at the end, so the worst case is a tick fires slightly
+  earlier/later than expected — not a correctness issue.
+
+  ---
+  7. Key Component Responsibilities
+
+  Component: Config Loader
+  File: src/config/loader.js
+  Responsibility: Parse YAML, apply defaults, validate required sections
+  ────────────────────────────────────────
+  Component: RNG
+  File: src/simulation/rng.js
+  Responsibility: Seeded mulberry32 PRNG returning [0,1)
+  ────────────────────────────────────────
+  Component: Clock
+  File: src/simulation/clock.js
+  Responsibility: Simulated time, play/pause/speed, season derivation from month
+  ────────────────────────────────────────
+  Component: Engine
+  File: src/simulation/engine.js
+  Responsibility: Tick orchestration: advance clock → weather → step → record →
+    emit
+  ────────────────────────────────────────
+  Component: Weather Model
+  File: src/model/weather-model.js
+  Responsibility: Deterministic temp/cloud/irradiance from sinusoidal curves +
+    PRNG noise
+  ────────────────────────────────────────
+  Component: Weather Condition
+  File: src/model/weather-condition.js
+  Responsibility: Immutable value object: temperature, irradiance, cloud cover,
+    season
+  ────────────────────────────────────────
+  Component: Season
+  File: src/model/season.js
+  Responsibility: Frozen enum + fromMonth() derivation
+  ────────────────────────────────────────
+  Component: Asset (abstract)
+  File: src/model/asset.js
+  Responsibility: Base class: step() contract + updateEnergy() for energy
+    accounting
+  ────────────────────────────────────────
+  Component: BaseConsumption
+  File: src/model/base-consumption.js
+  Responsibility: Random walk around base load, time-of-day + seasonal
+  modulation
+  ────────────────────────────────────────
+  Component: HeatPump
+  File: src/model/heat-pump.js
+  Responsibility: Physics-based: max(0, T_indoor - T_outdoor) * lossCoeff / COP
+  ────────────────────────────────────────
+  Component: PV
+  File: src/model/pv.js
+  Responsibility: Generation: -(peakPower * irradianceFactor)
+  ────────────────────────────────────────
+  Component: HomeEvCharger
+  File: src/model/home-ev-charger.js
+  Responsibility: Stochastic session-based charging (Poisson process)
+  ────────────────────────────────────────
+  Component: PublicEvCharger
+  File: src/model/public-ev-charger.js
+  Responsibility: Same logic as home but higher power/more sessions
+  ────────────────────────────────────────
+  Component: House
+  File: src/model/house.js
+  Responsibility: Aggregates 4 assets, computes net power
+  ────────────────────────────────────────
+  Component: Neighbourhood
+  File: src/model/neighbourhood.js
+  Responsibility: Aggregates 30 houses + 6 public chargers, maintains 24h
+  history
+  ────────────────────────────────────────
+  Component: HTTP Server
+  File: src/server.js
+  Responsibility: SSE /events, POST /control, GET /state, static HTML serve
+  ────────────────────────────────────────
+  Component: UI
+  File: src/ui/index.html
+  Responsibility: Chart.js dashboard, EventSource SSE client, play/pause/speed
+    controls
+
+  ---
+  8. Test Coverage of Unhappy Paths
+
+  Current test coverage is heavily happy-path. Here is the gap analysis:
+
+  Test file: clock.test.js
+  Happy path tests: 8
+  Unhappy path tests: 0
+  Gaps: Negative advance, NaN, extreme values, month boundary edge cases
+  ────────────────────────────────────────
+  Test file: energy-accounting.test.js
+  Happy path tests: 7
+  Unhappy path tests: 0
+  Gaps: Zero/negative deltaTime, negative variance, very large step sizes, base
+    consumption without weather object
+  ────────────────────────────────────────
+  Test file: reproducibility.test.js
+  Happy path tests: 4
+  Unhappy path tests: 0
+  Gaps: Seed 0, negative seed, single-step simulation, empty neighbourhood
+  ────────────────────────────────────────
+  Test file: weather.test.js
+  Happy path tests: 8
+  Unhappy path tests: 0
+  Gaps: DST transitions, leap years, latitude extremes (equator, poles), invalid
+
+    dates
+
+  Specific missing tests:
+
+  1. Config validation errors — loadConfig() throws on missing sections but no
+  test covers this. Invalid values (negative house count, zero step size) are
+  silently accepted.
+  2. Heat pump at capacity limit — Tests verify cold > mild and idle when warm,
+  but never test the max power cap (e.g. extreme cold where heatingDemand * 
+  lossCoeff / COP > maxPower_kW).
+  3. EV charger session overlap — A single charger cannot start a new session
+  while active, but no test verifies this invariant.
+  4. History trimming — No test verifies that recordHistory correctly trims to
+  the max entry count.
+  5. Server error handling — No test for malformed JSON to /control,
+  non-existent action, missing value field.
+  6. _buildState() with null weather — _buildState() handles _currentWeather ===
+   null (line 110), but no test verifies this path.
+  7. Base consumption modulation disabled — enableModulation = true/false is
+  tested implicitly but there's no explicit test that setting it to false
+  produces no time/season variation.
+  8. Cloud cover mean reversion — The random walk + mean reversion is complex;
+  no test verifies it converges to the seasonal target over time.
+
+  ---
+  Summary
+
+  Criterion: SOLID principles
+  Grade: Good
+  Notes: All 5 principles followed; House factory is the only minor
+    tight-coupling point
+  ────────────────────────────────────────
+  Criterion: Loose coupling
+  Grade: Good
+  Notes: Clean callback pattern between server and engine; value objects for
+    cross-boundary data
+  ────────────────────────────────────────
+  Criterion: Clean structure
+  Grade: Good
+  Notes: Clear domain-aligned directory layout; acyclic dependency graph
+  ────────────────────────────────────────
+  Criterion: Readability
+  Grade: Good
+  Notes: Consistent JSDoc, descriptive names, short files. Minor clarity issue
+    with -0 || 0 in PV
+  ────────────────────────────────────────
+  Criterion: Maintainability
+  Grade: Good
+  Notes: Config-driven, single dependency, easy to extend. Two season
+    representations (enum vs string) are a small design wart
+  ────────────────────────────────────────
+  Criterion: Race conditions
+  Grade: Clean
+  Notes: Single-threaded setTimeout loop with atomic pause; no concurrent
+    mutation possible
+  ────────────────────────────────────────
+  Criterion: Documentation
+  Grade: Adequate
+  Notes: Good JSDoc on classes. docs/ and claude/ have requirements docs but no
+    architecture decision records
+  ────────────────────────────────────────
+  Criterion: Unhappy-path tests
+  Grade: Insufficient
+  Notes: All 27 tests cover happy paths only. Missing: config validation errors,
+
+    boundary conditions, max power caps, history trimming, server error
+  responses
+
+  The two most actionable findings are:
+  1. Add unhappy-path tests — especially for config validation, heat pump at
+  capacity, and server error handling
+  2. Unify the two season systems — SimulationClock.season returns "Winter"
+  strings while Season.WINTER is an enum constant. Pick one approach and use it
+  consistently, otherwise _buildState() at src/simulation/engine.js:106 reports
+  the clock's string season which may differ from the weather model's enum-based
+   season at the same timestamp
+
+✻ Cogitated for 6m 52s

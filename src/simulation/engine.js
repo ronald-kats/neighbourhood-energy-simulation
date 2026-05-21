@@ -137,6 +137,16 @@ export class SimulationEngine {
         currentPower_kW: c.currentPower_kW,
         cumulativeEnergy_kWh: Math.round(c.cumulativeEnergy_kWh * 1000) / 1000,
       })),
+      battery: this.neighbourhood.battery ? {
+        name: this.neighbourhood.battery.name,
+        currentPower_kW: this.neighbourhood.battery.currentPower_kW,
+        stateOfCharge_kWh: Math.round(this.neighbourhood.battery.stateOfCharge_kWh * 100) / 100,
+        socFraction: Math.round(this.neighbourhood.battery.socFraction * 1000) / 1000,
+        cumulativeEnergy_kWh: Math.round(this.neighbourhood.battery.cumulativeEnergy_kWh * 1000) / 1000,
+        status: this.neighbourhood.battery.currentPower_kW > 0.01 ? 'charging'
+              : this.neighbourhood.battery.currentPower_kW < -0.01 ? 'discharging'
+              : 'idle',
+      } : null,
     };
   }
 }
